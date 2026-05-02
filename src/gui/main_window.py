@@ -110,6 +110,10 @@ class KinematicExplorerApp(QMainWindow):
         action_clear_roi.triggered.connect(self.clear_roi)
         tools_menu.addAction(action_clear_roi)
 
+        action_clear_spec_regions = QAction('Clear Spectrum Regions', self)
+        action_clear_spec_regions.triggered.connect(self.clear_spectrum_regions)
+        tools_menu.addAction(action_clear_spec_regions)
+
         cmap_menu = QMenu('Moment Intensity Colormap', self)
         for c in ['turbo', 'inferno', 'viridis', 'plasma', 'magma', 'grey']:
             act = QAction(c.capitalize(), self)
@@ -204,6 +208,10 @@ class KinematicExplorerApp(QMainWindow):
     def clear_roi(self):
         tab = self.get_active_tab()
         if tab: tab.clear_roi()
+
+    def clear_spectrum_regions(self):
+        tab = self.get_active_tab()
+        if tab: tab.clear_spectrum_regions()
 
     def load_file(self):
         options = QFileDialog.Options()

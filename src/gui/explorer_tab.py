@@ -20,6 +20,84 @@ from src.gui.dialogs import LineCatalogDialog, LineSelectionDialog, ContourDialo
 # ==============================================================================
 # INDIVIDUAL EXPLORER TAB
 # ==============================================================================
+
+class SpectrumViewBox(pg.ViewBox):
+    def __init__(self, *args, **kwds):
+        super().__init__(*args, **kwds)
+        self.drag_start = None
+        self.current_roi = None
+        self.parent_tab = None
+
+    def mouseDragEvent(self, ev, axis=None):
+        if ev.modifiers() == Qt.ControlModifier:
+            if ev.isStart():
+                self.drag_start = self.mapSceneToView(ev.buttonDownScenePos())
+                self.current_roi = pg.ROI([self.drag_start.x(), self.drag_start.y()], [0, 0], pen=pg.mkPen('c', width=2))
+                self.current_roi.addScaleHandle([0, 0], [1, 1])
+                self.current_roi.addScaleHandle([1, 1], [0, 0])
+                self.current_roi.addScaleHandle([0, 1], [1, 0])
+                self.current_roi.addScaleHandle([1, 0], [0, 1])
+                self.current_roi.addScaleHandle([0.5, 0], [0.5, 1])
+                self.current_roi.addScaleHandle([0.5, 1], [0.5, 0])
+                self.current_roi.addScaleHandle([0, 0.5], [1, 0.5])
+                self.current_roi.addScaleHandle([1, 0.5], [0, 0.5])
+                self.addItem(self.current_roi)
+                ev.accept()
+            elif ev.isFinish():
+                if self.parent_tab and self.current_roi:
+                    pos = self.current_roi.pos()
+                    size = self.current_roi.size()
+                    nx = pos.x() + min(0, size.x())
+                    ny = pos.y() + min(0, size.y())
+                    nw = abs(size.x())
+                    nh = abs(size.y())
+                    self.current_roi.setPos([nx, ny])
+                    self.current_roi.setSize([nw, nh])
+                    self.parent_tab.add_spectrum_region(self.current_roi)
+                self.current_roi = None
+                ev.accept()
+            else:
+                if self.current_roi:
+                    current_pos = self.mapSceneToView(ev.scenePos())
+                    w = current_pos.x() - self.drag_start.x()
+                    h = current_pos.y() - self.drag_start.y()
+                    self.current_roi.setSize([w, h])
+                ev.accept()
+        else:
+            super().mouseDragEvent(ev, axis)
+
+    def mouseClickEvent(self, ev):
+        if ev.modifiers() == Qt.ControlModifier:
+            pos = self.mapSceneToView(ev.scenePos())
+            if self.parent_tab:
+                hit = False
+                for item in self.parent_tab.spectrum_rois:
+                    roi = item["roi"]
+                    r_pos = roi.pos()
+                    r_size = roi.size()
+                    min_x = min(r_pos.x(), r_pos.x() + r_size.x())
+                    max_x = max(r_pos.x(), r_pos.x() + r_size.x())
+                    
+                    # Spectrum ROIs are conceptually 1D velocity bands. 
+                    # We allow clicking anywhere in the vertical column (ignoring Y bounds)
+                    # so the user doesn't have to click exactly inside a potentially flat box.
+                    if min_x <= pos.x() <= max_x:
+                        self.parent_tab.select_region_for_deletion(roi)
+                        hit = True
+                        
+                if hit:
+                    ev.accept()
+                    return
+        super().mouseClickEvent(ev)
+
+    def keyPressEvent(self, ev):
+        if ev.key() == Qt.Key_Escape:
+            if self.parent_tab and hasattr(self.parent_tab, 'rois_to_delete') and self.parent_tab.rois_to_delete:
+                self.parent_tab.delete_selected_regions()
+                ev.accept()
+                return
+        super().keyPressEvent(ev)
+
 class ExplorerTab(QWidget):
     def __init__(self, parent_window):
         super().__init__()
@@ -120,7 +198,7 @@ class ExplorerTab(QWidget):
         
         ctrl_layout.addWidget(QLabel("Vel:"))
         self.input_channel_vel = QLineEdit("")
-        self.input_channel_vel.setFixedWidth(60)
+        self.input_channel_vel.setMinimumWidth(80)
         self.input_channel_vel.editingFinished.connect(self.set_channel_from_text)
         ctrl_layout.addWidget(self.input_channel_vel)
         ctrl_layout.addWidget(QLabel("km/s"))
@@ -148,7 +226,10 @@ class ExplorerTab(QWidget):
         lbl_spec_title.setStyleSheet("font-weight: bold; color: #3498db; font-size: 13px;")
         spectrum_layout.addWidget(lbl_spec_title)
         
-        self.plot_widget = pg.PlotWidget()
+        self.spectrum_viewbox = SpectrumViewBox()
+        self.spectrum_viewbox.parent_tab = self
+        self.plot_widget = pg.PlotWidget(viewBox=self.spectrum_viewbox)
+        self.plot_widget.showGrid(x=True, y=True, alpha=0.3)
         fix_axis_scaling(self.plot_widget.getAxis('left')) 
         self.plot_widget.setLabel('bottom', 'Radio Velocity (km/s)')
         self.plot_widget.setLabel('left', 'Flux') 
@@ -178,18 +259,66 @@ class ExplorerTab(QWidget):
         self.combo_spec_stat = QComboBox()
         self.combo_spec_stat.addItems(["Mean", "Max", "Sum"])
         self.combo_spec_stat.currentTextChanged.connect(self.update_spectrum)
+        self.combo_spec_stat.currentTextChanged.connect(lambda: self.lbl_region_result.setText("---"))
         input_layout.addWidget(self.combo_spec_stat)
         
         input_layout.addStretch()
         input_layout.addWidget(QLabel("Min Vel:"))
         self.input_vmin = QLineEdit("0.00")
-        self.input_vmin.setFixedWidth(70)
+        self.input_vmin.setMinimumWidth(80)
         input_layout.addWidget(self.input_vmin)
         
         input_layout.addWidget(QLabel("Max Vel:"))
         self.input_vmax = QLineEdit("1.00")
-        self.input_vmax.setFixedWidth(70)
+        self.input_vmax.setMinimumWidth(80)
         input_layout.addWidget(self.input_vmax)
+        
+        # New Selection UI
+        input_layout.addStretch()
+        
+        self.lbl_regions = QLabel("Regions:")
+        input_layout.addWidget(self.lbl_regions)
+        
+        self.combo_regions = QComboBox()
+        self.combo_regions.setSizeAdjustPolicy(QComboBox.AdjustToContents)
+        self.combo_regions.addItem("None")
+        self.combo_regions.currentTextChanged.connect(self.on_region_selected)
+        input_layout.addWidget(self.combo_regions)
+        
+        self.lbl_plus1 = QLabel("+")
+        input_layout.addWidget(self.lbl_plus1)
+        
+        self.combo_regions_2 = QComboBox()
+        self.combo_regions_2.setSizeAdjustPolicy(QComboBox.AdjustToContents)
+        self.combo_regions_2.addItem("None")
+        self.combo_regions_2.currentTextChanged.connect(self.on_region_selected)
+        input_layout.addWidget(self.combo_regions_2)
+
+        self.lbl_plus2 = QLabel("+")
+        input_layout.addWidget(self.lbl_plus2)
+        
+        self.combo_regions_3 = QComboBox()
+        self.combo_regions_3.setSizeAdjustPolicy(QComboBox.AdjustToContents)
+        self.combo_regions_3.addItem("None")
+        self.combo_regions_3.currentTextChanged.connect(self.on_region_selected)
+        input_layout.addWidget(self.combo_regions_3)
+        
+        self.lbl_calc = QLabel("| Calc:")
+        input_layout.addWidget(self.lbl_calc)
+        
+        self.combo_region_calc = QComboBox()
+        self.combo_region_calc.addItems(["Integrated intensity", "RMS"])
+        self.combo_region_calc.currentTextChanged.connect(self.update_spectrum_region_calc)
+        input_layout.addWidget(self.combo_region_calc)
+        
+        self.lbl_region_result = QLabel("---")
+        self.lbl_region_result.setStyleSheet("font-weight: bold; color: #f1c40f;")
+        input_layout.addWidget(self.lbl_region_result)
+        
+        self.spectrum_rois = []
+        self.rois_to_delete = []
+        self.update_region_ui_visibility()
+        
         spectrum_layout.addLayout(input_layout)
 
         self.input_vmin.editingFinished.connect(self.update_region_from_text)
@@ -227,7 +356,7 @@ class ExplorerTab(QWidget):
 
             thresh_layout.addWidget(QLabel("Min. Intensity:"))
             input_thresh = QLineEdit("0.000")
-            input_thresh.setFixedWidth(60)
+            input_thresh.setMinimumWidth(80)
             thresh_layout.addWidget(input_thresh)
             
             btn_pick = QPushButton("💧")
@@ -339,7 +468,7 @@ class ExplorerTab(QWidget):
                     break
 
         if source_plot == self.plot_widget:
-            if event.button() == Qt.LeftButton:
+            if event.button() == Qt.LeftButton and event.modifiers() == Qt.NoModifier:
                 mp = self.plot_widget.plotItem.vb.mapSceneToView(event.scenePos())
                 idx = (np.abs(self.v_axis - mp.x())).argmin()
                 self.slider_channel.setValue(idx)
@@ -366,8 +495,15 @@ class ExplorerTab(QWidget):
             return 
             
         if source_plot == self.plot_channel and self.current_roi is not None:
-            items = self.plot_channel.scene().items(event.scenePos())
-            is_clicked = any(item is self.current_roi or item.parentItem() is self.current_roi for item in items)
+            mp = self.plot_channel.vb.mapSceneToView(event.scenePos())
+            r_pos = self.current_roi.pos()
+            r_size = self.current_roi.size()
+            min_x = min(r_pos.x(), r_pos.x() + r_size.x())
+            max_x = max(r_pos.x(), r_pos.x() + r_size.x())
+            min_y = min(r_pos.y(), r_pos.y() + r_size.y())
+            max_y = max(r_pos.y(), r_pos.y() + r_size.y())
+            
+            is_clicked = (min_x <= mp.x() <= max_x) and (min_y <= mp.y() <= max_y)
             self.roi_selected = True if is_clicked else False
             self.current_roi.setPen(pg.mkPen('y', width=3) if is_clicked else pg.mkPen('c', width=2))
 
@@ -849,3 +985,196 @@ class ExplorerTab(QWidget):
             val_str = f'{val:.3e}' if (abs(val) < 1e-3 and abs(val)>0) else f'{val:.4g}'
             self.lbl_hover_spec.setText(f"Ch: {idx} | {self.v_axis[idx]:.2f} km/s | {val_str} {self.spec_unit}")
             self.lbl_hover_spec.setStyleSheet("color: #3498db; font-weight: bold; font-size: 9.5px;")
+
+    def update_region_ui_visibility(self):
+        n = len(self.spectrum_rois)
+        
+        self.lbl_regions.setVisible(n >= 1)
+        self.combo_regions.setVisible(n >= 1)
+        self.lbl_calc.setVisible(n >= 1)
+        self.combo_region_calc.setVisible(n >= 1)
+        self.lbl_region_result.setVisible(n >= 1)
+        
+        self.lbl_plus1.setVisible(n >= 2)
+        self.combo_regions_2.setVisible(n >= 2)
+        
+        self.lbl_plus2.setVisible(n >= 3)
+        self.combo_regions_3.setVisible(n >= 3)
+
+    def rename_regions(self):
+        self.combo_regions.blockSignals(True)
+        self.combo_regions_2.blockSignals(True)
+        self.combo_regions_3.blockSignals(True)
+        
+        self.combo_regions.clear()
+        self.combo_regions_2.clear()
+        self.combo_regions_3.clear()
+        
+        self.combo_regions.addItem("None")
+        self.combo_regions_2.addItem("None")
+        self.combo_regions_3.addItem("None")
+        
+        for i, item in enumerate(self.spectrum_rois):
+            new_name = f"Region {i + 1}"
+            item["name"] = new_name
+            item["text_item"].setText(new_name)
+            
+            self.combo_regions.addItem(new_name)
+            self.combo_regions_2.addItem(new_name)
+            self.combo_regions_3.addItem(new_name)
+            
+            item["roi"].setPen(pg.mkPen('c', width=2))
+            
+        self.combo_regions.blockSignals(False)
+        self.combo_regions_2.blockSignals(False)
+        self.combo_regions_3.blockSignals(False)
+        
+        self.on_region_selected() 
+        self.lbl_region_result.setText("---")
+
+    def delete_region(self, roi):
+        if roi.scene():
+            roi.scene().removeItem(roi)
+        else:
+            self.plot_widget.removeItem(roi)
+            
+        for i, item in enumerate(self.spectrum_rois):
+            if item["roi"] == roi:
+                ti = item["text_item"]
+                if ti.scene():
+                    ti.scene().removeItem(ti)
+                else:
+                    self.plot_widget.removeItem(ti)
+                self.spectrum_rois.pop(i)
+                break
+
+    def delete_selected_regions(self):
+        for roi in list(self.rois_to_delete):
+            self.delete_region(roi)
+        self.rois_to_delete.clear()
+        self.update_region_ui_visibility()
+        self.rename_regions()
+
+    def clear_spectrum_regions(self):
+        for item in list(self.spectrum_rois):
+            self.delete_region(item["roi"])
+        self.rois_to_delete.clear()
+        self.update_region_ui_visibility()
+        self.rename_regions()
+
+    def select_region_for_deletion(self, roi):
+        if roi in self.rois_to_delete:
+            self.rois_to_delete.remove(roi)
+        else:
+            self.rois_to_delete.append(roi)
+        self.on_region_selected()
+
+    def add_spectrum_region(self, roi):
+        region_name = f"Region {len(self.spectrum_rois) + 1}"
+        roi_info = {"name": region_name, "roi": roi}
+        self.spectrum_rois.append(roi_info)
+        
+        self.update_region_ui_visibility()
+        
+        text_item = pg.TextItem(text=region_name, color=(200, 200, 200, 150), anchor=(1, 1))
+        self.plot_widget.addItem(text_item)
+        
+        def update_text_pos(r=roi, t=text_item):
+            try:
+                pos = r.pos()
+                size = r.size()
+                max_x = max(pos.x(), pos.x() + size.x())
+                max_y = max(pos.y(), pos.y() + size.y())
+                t.setPos(max_x, max_y)
+            except Exception:
+                pass
+            
+        roi.sigRegionChanged.connect(update_text_pos)
+        update_text_pos()
+        
+        roi_info["text_item"] = text_item
+        roi_info["update_text_pos"] = update_text_pos
+        
+        roi.sigRegionChanged.connect(self.update_spectrum_region_calc)
+        
+        self.rename_regions()
+        self.combo_regions.blockSignals(True)
+        self.combo_regions.setCurrentText(region_name)
+        self.combo_regions.blockSignals(False)
+        self.on_region_selected()
+        self.lbl_region_result.setText("---")
+
+    def on_region_selected(self, _=None):
+        selected_names = [
+            self.combo_regions.currentText(),
+            self.combo_regions_2.currentText(),
+            self.combo_regions_3.currentText()
+        ]
+        
+        for item in self.spectrum_rois:
+            roi = item["roi"]
+            if roi in getattr(self, 'rois_to_delete', []):
+                roi.setPen(pg.mkPen('r', width=3))
+            elif item["name"] in selected_names and item["name"] != "None":
+                roi.setPen(pg.mkPen('y', width=3))
+            else:
+                roi.setPen(pg.mkPen('c', width=2))
+        self.update_spectrum_region_calc()
+
+    def update_spectrum_region_calc(self, _=None):
+        if not self.spectrum_rois or self.spectrum_curve.yData is None:
+            self.lbl_region_result.setText("---")
+            return
+            
+        selected_names = [
+            self.combo_regions.currentText(),
+            self.combo_regions_2.currentText(),
+            self.combo_regions_3.currentText()
+        ]
+        
+        selected_rois = [item["roi"] for item in self.spectrum_rois if item["name"] in selected_names and item["name"] != "None"]
+                
+        if not selected_rois:
+            self.lbl_region_result.setText("---")
+            return
+            
+        v_axis = self.spectrum_curve.xData
+        flux = self.spectrum_curve.yData
+        
+        if v_axis is not None and len(v_axis) == len(flux) + 1:
+            v_axis = (v_axis[:-1] + v_axis[1:]) / 2.0
+            
+        if v_axis is None or flux is None:
+            return
+            
+        combined_mask = np.zeros_like(v_axis, dtype=bool)
+        
+        for roi in selected_rois:
+            pos = roi.pos()
+            size = roi.size()
+            min_v = pos.x()
+            max_v = pos.x() + size.x()
+            
+            if min_v > max_v:
+                min_v, max_v = max_v, min_v
+                
+            combined_mask |= (v_axis >= min_v) & (v_axis <= max_v)
+            
+        valid_flux = flux[combined_mask]
+        
+        if len(valid_flux) == 0:
+            self.lbl_region_result.setText("No data")
+            return
+            
+        calc_type = self.combo_region_calc.currentText()
+        if calc_type == "Integrated intensity":
+            if len(v_axis) > 1:
+                dv = np.abs(v_axis[1] - v_axis[0])
+            else:
+                dv = 1.0
+            result = np.sum(valid_flux) * dv
+            unit = f"{self.spec_unit} km/s"
+            self.lbl_region_result.setText(f"{result:.3f} {unit}")
+        elif calc_type == "RMS":
+            rms = np.sqrt(np.mean(valid_flux**2))
+            self.lbl_region_result.setText(f"{rms:.3f} {self.spec_unit}")
