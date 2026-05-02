@@ -1,0 +1,37 @@
+# =========================
+# Python & Virtual Environments
+# =========================
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+env/
+.venv/
+.env/
+
+# =========================
+# Astronomy Data & Exports
+# =========================
+# Ignore data cubes and catalogs so they don't bloat the repo
+*.fits
+*.fit
+*.fits.gz
+*.csv
+*.dat
+*.pdf
+
+# =========================
+# PyInstaller Build Folders
+# =========================
+# Ignore the generated standalone executables and temporary build files
+build/
+dist/
+*.spec
+
+# =========================
+# IDEs & System Files
+# =========================
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

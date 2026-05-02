@@ -1,0 +1,19 @@
+CubeX/
+├── main.py                 # The single entry point to run the app
+├── src/                    # All source code lives here
+│   ├── __init__.py
+│   ├── core/               # Backend logic (No GUI code here)
+│   │   ├── __init__.py
+│   │   └── splatalogue.py  # format_chemical_formula() and SplatalogueWorker
+│   └── gui/                # Frontend user interface
+│       ├── __init__.py
+│       ├── main_window.py  # KinematicExplorerApp class
+│       ├── explorer_tab.py # ExplorerTab class
+│       ├── dialogs.py      # LineCatalogDialog, LineSelectionDialog, ContourDialog
+│       └── custom.py       # JumpSlider, WCSAxisItem
+├── assets/                 # Static files
+│   └── style.qss           # Put your dark_stylesheet string in this text file
+├── requirements.txt        # List of pip dependencies
+├── README.md               # Instructions on what the app is and how to use it
+├── LICENSE                 # Choose a license (e.g., MIT or GPL-3.0)
+└── .gitignore              # Files git should ignore (e.g., __pycache__, .fits files)
