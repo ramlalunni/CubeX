@@ -26,6 +26,7 @@ env/
 # Ignore the generated standalone executables and temporary build files
 build/
 dist/
+dists_prev/
 *.spec
 
 # =========================

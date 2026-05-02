@@ -819,10 +819,24 @@ class ExplorerTab(QWidget):
                 val = data_array[x_idx, y_idx]
                 unit_str = self.display_unit if panel_id == 'channel' else self.panels[panel_id].get('unit', '')
                 
-                active_label.setText(f"({x_idx}, {y_idx}) | {f'{val:.3e}' if (not np.isnan(val) and abs(val) < 1e-3 and abs(val)>0) else f'{val:.4g}' if not np.isnan(val) else 'NaN'} {unit_str}")
+                # Format the flux value
+                val_str = f"{val:.3e}" if (not np.isnan(val) and abs(val) < 1e-3 and abs(val)>0) else f"{val:.4g}" if not np.isnan(val) else "NaN"
+
+                # Calculate Absolute RA and Dec
+                if self.wcs_2d is not None:
+                    coord = self.wcs_2d.pixel_to_world(x_idx, y_idx)
+                    ra_str = coord.ra.to_string(unit=u.hourangle, sep=':', precision=2, pad=True)
+                    dec_str = coord.dec.to_string(unit=u.degree, sep=':', precision=1, alwayssign=True, pad=True)
+                    coord_text = f"RA: {ra_str}, Dec: {dec_str}"
+                else:
+                    # Fallback to pixels if WCS fails to load
+                    coord_text = f"Pix: ({x_idx}, {y_idx})"
+                
+                # Set the final label text (Pixels + Absolute RA/Dec + Value)
+                active_label.setText(f"Pix: ({x_idx}, {y_idx}) | {coord_text} | {val_str} {unit_str}")
                 active_label.setStyleSheet("color: #3498db; font-weight: bold; font-size: 9.5px;")
                 return
-        active_label.setText("") 
+        active_label.setText("")
 
     def hover_spectrum(self, pos):
         self.clear_all_hover_labels()
