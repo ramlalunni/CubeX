@@ -106,7 +106,7 @@ class KinematicExplorerApp(QMainWindow):
         tools_menu.addAction(action_contour)
         tools_menu.addSeparator()
 
-        action_clear_roi = QAction('Clear Spatial ROI', self)
+        action_clear_roi = QAction('Clear Spatial ROIs', self)
         action_clear_roi.triggered.connect(self.clear_roi)
         tools_menu.addAction(action_clear_roi)
 

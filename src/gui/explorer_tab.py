@@ -9,7 +9,7 @@ import astropy.units as u
 from PyQt5.QtCore import QTimer, Qt
 from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
                              QPushButton, QFileDialog, QMessageBox, QLineEdit, 
-                             QComboBox, QFrame)
+                             QComboBox, QFrame, QStackedWidget)
 from spectral_cube import SpectralCube
 
 # Import our modularized components
@@ -20,6 +20,115 @@ from src.gui.dialogs import LineCatalogDialog, LineSelectionDialog, ContourDialo
 # ==============================================================================
 # INDIVIDUAL EXPLORER TAB
 # ==============================================================================
+
+
+class ChannelMapViewBox(pg.ViewBox):
+    def __init__(self, *args, **kwds):
+        super().__init__(*args, **kwds)
+        self.drag_start = None
+        self.current_roi = None
+        self.parent_tab = None
+
+    def mouseDragEvent(self, ev, axis=None):
+        if ev.modifiers() == Qt.ControlModifier and self.parent_tab:
+            mode = self.parent_tab.combo_panel_mode.currentText()
+            if mode == "Spatial Analysis":
+                tool = self.parent_tab.combo_spatial_tool.currentText()
+                if tool == "Point":
+                    ev.ignore()
+                    return
+                if ev.isStart():
+                    self.drag_start = self.mapSceneToView(ev.buttonDownScenePos())
+                    if tool == "Line":
+                        self.current_roi = pg.LineSegmentROI([[self.drag_start.x(), self.drag_start.y()], [self.drag_start.x() + 0.1, self.drag_start.y() + 0.1]], pen=pg.mkPen('c', width=2))
+                    elif tool == "Rectangle":
+                        self.current_roi = pg.RectROI([self.drag_start.x(), self.drag_start.y()], [1e-5, 1e-5], pen=pg.mkPen('c', width=2))
+                    elif tool == "Circle":
+                        self.current_roi = pg.CircleROI([self.drag_start.x(), self.drag_start.y()], [1e-5, 1e-5], pen=pg.mkPen('c', width=2))
+                    
+                    if self.current_roi:
+                        self.addItem(self.current_roi)
+                        ev.accept()
+                elif ev.isFinish():
+                    if self.current_roi:
+                        self.parent_tab.add_spatial_region(self.current_roi, tool)
+                        self.current_roi = None
+                    ev.accept()
+                else:
+                    if self.current_roi:
+                        current_pos = self.mapSceneToView(ev.scenePos())
+                        if tool == "Line":
+                            handles = self.current_roi.getHandles()
+                            if len(handles) > 1:
+                                self.current_roi.movePoint(handles[1], current_pos)
+                        else:
+                            w = current_pos.x() - self.drag_start.x()
+                            h = current_pos.y() - self.drag_start.y()
+                            self.current_roi.setSize([w, h])
+                    ev.accept()
+            else:
+                super().mouseDragEvent(ev, axis)
+        else:
+            super().mouseDragEvent(ev, axis)
+
+    def mouseClickEvent(self, ev):
+        if ev.modifiers() == Qt.ControlModifier and self.parent_tab:
+            mode = self.parent_tab.combo_panel_mode.currentText()
+            if mode == "Spatial Analysis":
+                tool = self.parent_tab.combo_spatial_tool.currentText()
+                pos = self.mapSceneToView(ev.scenePos())
+                
+                hit = False
+                for item in self.parent_tab.spatial_rois:
+                    roi = item["roi"]
+                    if hasattr(roi, 'shape'):
+                        if roi.shape().contains(roi.mapFromScene(ev.scenePos())):
+                            self.parent_tab.select_spatial_region(roi)
+                            hit = True
+                            
+                if not hit:
+                    for item in self.parent_tab.spatial_rois:
+                        roi = item["roi"]
+                        if isinstance(roi, pg.LineSegmentROI):
+                            pts = roi.getSceneHandlePositions()
+                            p_scene = ev.scenePos()
+                            import numpy as np
+                            p = np.array([p_scene.x(), p_scene.y()])
+                            for (p1_local, p1_scene), (p2_local, p2_scene) in zip(pts[:-1], pts[1:]):
+                                p1 = np.array([p1_scene.x(), p1_scene.y()])
+                                p2 = np.array([p2_scene.x(), p2_scene.y()])
+                                l2 = np.sum((p1 - p2)**2)
+                                if l2 == 0:
+                                    t = 0
+                                else:
+                                    t = max(0, min(1, np.dot(p - p1, p2 - p1) / l2))
+                                proj = p1 + t * (p2 - p1)
+                                dist = np.sqrt(np.sum((p - proj)**2))
+                                if dist < 10:
+                                    self.parent_tab.select_spatial_region(roi)
+                                    hit = True
+                                    break
+                if hit:
+                    ev.accept()
+                    return
+                
+                if tool == "Point":
+                    sz = self.parent_tab.pix_scale_arcsec * 1.5 if hasattr(self.parent_tab, 'pix_scale_arcsec') else 1.5
+                    roi = pg.CircleROI([pos.x()-sz/2, pos.y()-sz/2], [sz, sz], pen=pg.mkPen('c', width=2))
+                    self.addItem(roi)
+                    self.parent_tab.add_spatial_region(roi, "Point")
+                    ev.accept()
+                    return
+                
+        super().mouseClickEvent(ev)
+
+    def keyPressEvent(self, ev):
+        if ev.key() == Qt.Key_Escape:
+            if self.parent_tab and hasattr(self.parent_tab, 'spatial_rois_to_delete') and self.parent_tab.spatial_rois_to_delete:
+                self.parent_tab.delete_selected_spatial_regions()
+                ev.accept()
+                return
+        super().keyPressEvent(ev)
 
 class SpectrumViewBox(pg.ViewBox):
     def __init__(self, *args, **kwds):
@@ -155,7 +264,9 @@ class ExplorerTab(QWidget):
 
         ch_bottom = WCSAxisItem(orientation='bottom')
         ch_left = WCSAxisItem(orientation='left')
-        self.plot_channel = pg.PlotItem(axisItems={'bottom': ch_bottom, 'left': ch_left})
+        self.channel_viewbox = ChannelMapViewBox()
+        self.channel_viewbox.parent_tab = self
+        self.plot_channel = pg.PlotItem(viewBox=self.channel_viewbox, axisItems={'bottom': ch_bottom, 'left': ch_left})
         
         self.plot_channel.invertX(True)
         self.plot_channel.setLabel('bottom', 'RA offset (arcsec)')
@@ -169,13 +280,14 @@ class ExplorerTab(QWidget):
         self.view_channel.ui.histogram.gradient.loadPreset('turbo')
         self.view_channel.ui.histogram.setFixedWidth(160) 
         fix_axis_scaling(self.view_channel.ui.histogram.axis) 
-        channel_layout.addWidget(self.view_channel)
+        channel_layout.addWidget(self.view_channel, stretch=1)
 
         self.lbl_hover_ch = QLabel("")
         self.lbl_hover_ch.setStyleSheet("color: #aaa; font-size: 9.5px;")
         channel_layout.addWidget(self.lbl_hover_ch)
 
         ctrl_layout = QHBoxLayout()
+        ctrl_layout.setContentsMargins(0, 0, 0, 0)
         self.btn_prev = QPushButton("<")
         self.btn_play_rev = QPushButton("<<")
         self.btn_stop = QPushButton("■")
@@ -184,6 +296,7 @@ class ExplorerTab(QWidget):
         
         for btn in [self.btn_prev, self.btn_play_rev, self.btn_stop, self.btn_play_fwd, self.btn_next]:
             btn.setFixedWidth(40)
+            btn.setFixedHeight(22)
             ctrl_layout.addWidget(btn)
         
         self.btn_prev.clicked.connect(lambda _=False: self.step_channel(-1))
@@ -194,11 +307,12 @@ class ExplorerTab(QWidget):
         
         self.slider_channel = JumpSlider(Qt.Horizontal)
         self.slider_channel.valueChanged.connect(self.update_channel_map)
-        ctrl_layout.addWidget(self.slider_channel)
+        ctrl_layout.addWidget(self.slider_channel, stretch=1)
         
         ctrl_layout.addWidget(QLabel("Vel:"))
         self.input_channel_vel = QLineEdit("")
-        self.input_channel_vel.setMinimumWidth(80)
+        self.input_channel_vel.setFixedWidth(55)
+        self.input_channel_vel.setFixedHeight(22)
         self.input_channel_vel.editingFinished.connect(self.set_channel_from_text)
         ctrl_layout.addWidget(self.input_channel_vel)
         ctrl_layout.addWidget(QLabel("km/s"))
@@ -206,25 +320,93 @@ class ExplorerTab(QWidget):
         channel_layout.addLayout(ctrl_layout)
 
         roi_layout = QHBoxLayout()
-        roi_layout.addWidget(QLabel("Extraction Region:"))
+        roi_layout.setContentsMargins(0, 0, 0, 0)
+        self.lbl_combo_roi = QLabel("Spectrum Region:")
+        roi_layout.addWidget(self.lbl_combo_roi)
         self.combo_roi = QComboBox()
+        self.combo_roi.setFixedHeight(22)
         self.combo_roi.addItems(["Whole Map", "Point (Beam)", "Circle", "Rectangle", "Custom Polygon"])
         self.combo_roi.currentTextChanged.connect(self.change_roi)
         roi_layout.addWidget(self.combo_roi)
+
+        self.lbl_spatial_tool = QLabel("Spatial Analysis Tool:")
+        roi_layout.addWidget(self.lbl_spatial_tool)
+        self.combo_spatial_tool = QComboBox()
+        self.combo_spatial_tool.setFixedHeight(22)
+        self.combo_spatial_tool.addItems(["Point", "Line", "Rectangle", "Circle"])
+        self.combo_spatial_tool.currentTextChanged.connect(self.change_spatial_tool)
+        roi_layout.addWidget(self.combo_spatial_tool)
+        
+        self.lbl_spatial_tool.hide()
+        self.combo_spatial_tool.hide()
         roi_layout.addStretch()
         channel_layout.addLayout(roi_layout)
 
         top_half.addWidget(self.frame_channel, stretch=4)
         self.frames['channel'] = self.frame_channel
 
-        # --- Spectrum ---
+        # --- Spectrum / Spatial ---
         self.frame_spectrum = QFrame()
         self.frame_spectrum.setObjectName("PanelFrame")
-        spectrum_layout = QVBoxLayout(self.frame_spectrum)
+        self.panel_layout = QVBoxLayout(self.frame_spectrum)
         
-        lbl_spec_title = QLabel("Spectrum")
-        lbl_spec_title.setStyleSheet("font-weight: bold; color: #3498db; font-size: 13px;")
-        spectrum_layout.addWidget(lbl_spec_title)
+        top_bar = QHBoxLayout()
+        self.combo_panel_mode = QComboBox()
+        self.combo_panel_mode.addItems(["Spectrum", "Spatial Analysis"])
+        self.combo_panel_mode.setStyleSheet("font-weight: bold; color: #3498db; font-size: 13px;")
+        self.combo_panel_mode.currentTextChanged.connect(self.switch_panel_mode)
+        top_bar.addWidget(self.combo_panel_mode)
+        top_bar.addStretch()
+        self.panel_layout.addLayout(top_bar)
+        
+        self.stacked_panel = QStackedWidget()
+        self.panel_layout.addWidget(self.stacked_panel)
+        
+        self.spectrum_widget = QWidget()
+        spectrum_layout = QVBoxLayout(self.spectrum_widget)
+        spectrum_layout.setContentsMargins(0,0,0,0)
+        self.stacked_panel.addWidget(self.spectrum_widget)
+        
+        self.spatial_widget = QWidget()
+        spatial_layout = QVBoxLayout(self.spatial_widget)
+        spatial_layout.setContentsMargins(0,0,0,0)
+        
+        spatial_controls_layout = QHBoxLayout()
+        self.lbl_spatial_region_sel = QLabel("Select Region:")
+        self.combo_spatial_regions = QComboBox()
+        self.combo_spatial_regions.addItem("None")
+        self.combo_spatial_regions.currentTextChanged.connect(self.on_spatial_region_selected)
+        
+        self.btn_delete_spatial = QPushButton("Delete Selected")
+        self.btn_delete_spatial.clicked.connect(self.delete_selected_spatial_via_button)
+        
+        spatial_controls_layout.addWidget(self.lbl_spatial_region_sel)
+        spatial_controls_layout.addWidget(self.combo_spatial_regions)
+        spatial_controls_layout.addWidget(self.btn_delete_spatial)
+        spatial_controls_layout.addStretch()
+        
+        spatial_layout.addLayout(spatial_controls_layout)
+        
+        self.plot_spatial_1 = pg.PlotWidget(title="X Profile / Spatial Profile")
+        self.plot_spatial_1.showGrid(x=True, y=True, alpha=0.3)
+        self.plot_spatial_1.setLabel('bottom', 'Offset (arcsec)')
+        self.plot_spatial_1.setLabel('left', 'Flux')
+        self.curve_spatial_1 = self.plot_spatial_1.plot([], [], pen=pg.mkPen('w', width=2))
+        
+        self.plot_spatial_2 = pg.PlotWidget(title="Y Profile")
+        self.plot_spatial_2.showGrid(x=True, y=True, alpha=0.3)
+        self.plot_spatial_2.setLabel('bottom', 'Offset (arcsec)')
+        self.plot_spatial_2.setLabel('left', 'Flux')
+        self.curve_spatial_2 = self.plot_spatial_2.plot([], [], pen=pg.mkPen('w', width=2))
+        
+        self.lbl_spatial_stats = QLabel("Draw a region to see statistics.")
+        self.lbl_spatial_stats.setAlignment(Qt.AlignCenter)
+        self.lbl_spatial_stats.setStyleSheet("font-size: 13px; color: #aaa; background-color: #1a1a1a; border: 1px solid #333; border-radius: 4px; padding: 10px;")
+        
+        spatial_layout.addWidget(self.plot_spatial_1, stretch=1)
+        spatial_layout.addWidget(self.plot_spatial_2, stretch=1)
+        spatial_layout.addWidget(self.lbl_spatial_stats)
+        self.stacked_panel.addWidget(self.spatial_widget)
         
         self.spectrum_viewbox = SpectrumViewBox()
         self.spectrum_viewbox.parent_tab = self
@@ -327,6 +509,8 @@ class ExplorerTab(QWidget):
         self.region.sigRegionChanged.connect(self.update_moment_maps)
 
         top_half.addWidget(self.frame_spectrum, stretch=7)
+        self.spatial_rois = []
+        self.spatial_rois_to_delete = []
         self.frames['spectrum'] = self.frame_spectrum
         main_layout.addLayout(top_half, stretch=1)
 
@@ -426,6 +610,190 @@ class ExplorerTab(QWidget):
         self.plot_channel.scene().sigMouseClicked.connect(lambda event: self.universal_click_handler(event, self.plot_channel))
         for p in self.panels:
             p['plot_item'].scene().sigMouseClicked.connect(lambda event, view=p['plot_item']: self.universal_click_handler(event, view))
+
+
+    def switch_panel_mode(self, mode):
+        if mode == "Spectrum":
+            self.stacked_panel.setCurrentWidget(self.spectrum_widget)
+            self.lbl_combo_roi.show()
+            self.combo_roi.show()
+            self.lbl_spatial_tool.hide()
+            self.combo_spatial_tool.hide()
+        else:
+            self.stacked_panel.setCurrentWidget(self.spatial_widget)
+            self.lbl_combo_roi.hide()
+            self.combo_roi.hide()
+            self.lbl_spatial_tool.show()
+            self.combo_spatial_tool.show()
+            self.change_spatial_tool(self.combo_spatial_tool.currentText())
+
+    def change_spatial_tool(self, tool):
+        if tool == "Point":
+            self.plot_spatial_1.show()
+            self.plot_spatial_1.setTitle("X Profile")
+            self.plot_spatial_2.show()
+            self.lbl_spatial_stats.hide()
+        elif tool == "Line":
+            self.plot_spatial_1.show()
+            self.plot_spatial_1.setTitle("Spatial Profile")
+            self.plot_spatial_2.hide()
+            self.lbl_spatial_stats.hide()
+        else:
+            self.plot_spatial_1.hide()
+            self.plot_spatial_2.hide()
+            self.lbl_spatial_stats.show()
+
+    def add_spatial_region(self, roi, tool):
+        name = f"{tool} {len(self.spatial_rois) + 1}"
+        self.spatial_rois.append({"name": name, "roi": roi, "tool": tool})
+        
+        self.combo_spatial_regions.blockSignals(True)
+        self.combo_spatial_regions.addItem(name)
+        self.combo_spatial_regions.setCurrentText(name)
+        self.combo_spatial_regions.blockSignals(False)
+        
+        roi.sigRegionChanged.connect(self.update_spatial_analysis)
+        
+        for item in self.spatial_rois:
+            if item["roi"] != roi:
+                item["roi"].setPen(pg.mkPen('c', width=2))
+        roi.setPen(pg.mkPen('y', width=3))
+        
+        self.update_spatial_analysis()
+
+    def on_spatial_region_selected(self, name):
+        self.spatial_rois_to_delete.clear()
+        for item in self.spatial_rois:
+            if item["name"] == name:
+                self.spatial_rois_to_delete.append(item["roi"])
+                item["roi"].setPen(pg.mkPen('r', width=3))
+            else:
+                item["roi"].setPen(pg.mkPen('c', width=2))
+        self.update_spatial_analysis()
+
+    def delete_selected_spatial_via_button(self):
+        self.delete_selected_spatial_regions()
+
+    def select_spatial_region(self, roi):
+        # We can still keep the ctrl+click logic working and update the combo box
+        for item in self.spatial_rois:
+            if item["roi"] == roi:
+                self.combo_spatial_regions.setCurrentText(item["name"])
+                return
+
+    def delete_selected_spatial_regions(self):
+        for roi in list(self.spatial_rois_to_delete):
+            if roi.scene():
+                roi.scene().removeItem(roi)
+            else:
+                try:
+                    self.view_channel.removeItem(roi)
+                except:
+                    pass
+            
+            self.spatial_rois = [item for item in self.spatial_rois if item["roi"] != roi]
+        self.spatial_rois_to_delete.clear()
+        
+        self.combo_spatial_regions.blockSignals(True)
+        self.combo_spatial_regions.clear()
+        self.combo_spatial_regions.addItem("None")
+        for item in self.spatial_rois:
+            self.combo_spatial_regions.addItem(item["name"])
+        self.combo_spatial_regions.blockSignals(False)
+        
+        if self.spatial_rois:
+            self.combo_spatial_regions.setCurrentText(self.spatial_rois[-1]["name"])
+        else:
+            self.combo_spatial_regions.setCurrentText("None")
+            
+        self.update_spatial_analysis()
+
+    def update_spatial_analysis(self, _=None):
+        if self.cube_clean is None: return
+        data = self.get_current_channel_data()
+        if data is None: return
+        
+        active_item = None
+        if self.spatial_rois_to_delete:
+            for item in self.spatial_rois:
+                if item["roi"] == self.spatial_rois_to_delete[-1]:
+                    active_item = item
+                    break
+        elif self.spatial_rois:
+            active_item = self.spatial_rois[-1]
+            
+        if not active_item:
+            self.curve_spatial_1.setData([], [])
+            self.curve_spatial_2.setData([], [])
+            self.lbl_spatial_stats.setText("Draw a region to see statistics.")
+            return
+            
+        roi = active_item["roi"]
+        tool = active_item["tool"]
+        
+        try:
+            if tool == "Point":
+                pos = roi.pos()
+                size = roi.size()
+                cx, cy = pos.x() + size.x()/2, pos.y() + size.y()/2
+                
+                start_x = (self.nx / 2) * self.pix_scale_arcsec
+                start_y = -(self.ny / 2) * self.pix_scale_arcsec
+                x_idx = int((cx - start_x) / (-self.pix_scale_arcsec))
+                y_idx = int((cy - start_y) / self.pix_scale_arcsec)
+                
+                if 0 <= x_idx < self.nx and 0 <= y_idx < self.ny:
+                    x_profile = data[:, y_idx]
+                    y_profile = data[x_idx, :]
+                    
+                    x_axis = (self.nx / 2 - np.arange(self.nx)) * self.pix_scale_arcsec
+                    y_axis = (np.arange(self.ny) - self.ny / 2) * self.pix_scale_arcsec
+                    
+                    self.curve_spatial_1.setData(x_axis, x_profile)
+                    self.plot_spatial_1.setLabel('left', f'Flux ({self.display_unit})')
+                    self.plot_spatial_1.setLabel('bottom', 'RA offset (arcsec)')
+                    
+                    self.curve_spatial_2.setData(y_axis, y_profile)
+                    self.plot_spatial_2.setLabel('left', f'Flux ({self.display_unit})')
+                    self.plot_spatial_2.setLabel('bottom', 'Dec offset (arcsec)')
+                    
+            elif tool == "Line":
+                profile = roi.getArrayRegion(data, self.view_channel.getImageItem())
+                if profile is not None and len(profile) > 0:
+                    d_axis = np.arange(len(profile)) * self.pix_scale_arcsec
+                    self.curve_spatial_1.setData(d_axis, profile)
+                    self.plot_spatial_1.setLabel('left', f'Flux ({self.display_unit})')
+                    self.plot_spatial_1.setLabel('bottom', 'Distance (arcsec)')
+                    
+            elif tool in ["Rectangle", "Circle"]:
+                sub_data = roi.getArrayRegion(data, self.view_channel.getImageItem())
+                if sub_data is not None and sub_data.size > 0:
+                    valid = sub_data[~np.isnan(sub_data)]
+                    if len(valid) > 0:
+                        mean_val = np.mean(valid)
+                        sum_val = np.sum(valid)
+                        max_val = np.max(valid)
+                        min_val = np.min(valid)
+                        rms_val = np.sqrt(np.mean(valid**2))
+                        std_val = np.std(valid)
+                        
+                        stats_text = (
+                            f"<b>Statistics</b><br><br>"
+                            f"<table style='width:100%'>"
+                            f"<tr><td>Mean:</td><td>{mean_val:.4g} {self.display_unit}</td></tr>"
+                            f"<tr><td>Sum:</td><td>{sum_val:.4g} {self.display_unit}</td></tr>"
+                            f"<tr><td>Peak:</td><td>{max_val:.4g} {self.display_unit}</td></tr>"
+                            f"<tr><td>Min:</td><td>{min_val:.4g} {self.display_unit}</td></tr>"
+                            f"<tr><td>RMS:</td><td>{rms_val:.4g} {self.display_unit}</td></tr>"
+                            f"<tr><td>Std Dev:</td><td>{std_val:.4g} {self.display_unit}</td></tr>"
+                            f"</table>"
+                        )
+                        self.lbl_spatial_stats.setText(stats_text)
+                    else:
+                        self.lbl_spatial_stats.setText("No valid data in region.")
+
+        except Exception as e:
+            print(f"Error in update_spatial_analysis: {e}")
 
     def update_wcs_mode(self, is_absolute):
         self.is_absolute_wcs = is_absolute
@@ -574,6 +942,17 @@ class ExplorerTab(QWidget):
         self.rest_freq_hz = None
         self.view_channel.clear()
         self.spectrum_curve.setData([], [])
+        for roi_info in getattr(self, 'spatial_rois', []):
+            try:
+                self.view_channel.removeItem(roi_info['roi'])
+            except:
+                pass
+        self.spatial_rois = []
+        self.spatial_rois_to_delete = []
+        if hasattr(self, 'curve_spatial_1'):
+            self.curve_spatial_1.setData([], [])
+            self.curve_spatial_2.setData([], [])
+            self.lbl_spatial_stats.setText("Draw a region to see statistics.")
         self.v_line.hide()
         self.region.hide()
         for p in self.panels: p['view'].clear()
@@ -711,6 +1090,7 @@ class ExplorerTab(QWidget):
         slice_data = self.cube_clean[idx]
         self.view_channel.setImage(slice_data, autoLevels=False, levels=getattr(self, 'ch_levels', (0, 1)), autoHistogramRange=True, scale=scale_tup, pos=pos_tup)
         self.draw_contours('channel', self.view_channel, slice_data)
+        self.update_spatial_analysis()
         
         grad = self.view_channel.ui.histogram.gradient
         ticks = list(grad.ticks.keys())
@@ -767,6 +1147,9 @@ class ExplorerTab(QWidget):
         
     def clear_roi(self):
         self.combo_roi.setCurrentText("Whole Map")
+        if hasattr(self, 'spatial_rois_to_delete'):
+            self.spatial_rois_to_delete = [item["roi"] for item in self.spatial_rois]
+            self.delete_selected_spatial_regions()
 
     def update_spectrum(self):
         if self.cube_clean is None: return
