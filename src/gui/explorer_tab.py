@@ -9,7 +9,7 @@ import astropy.units as u
 from PyQt5.QtCore import QTimer, Qt
 from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
                              QPushButton, QFileDialog, QMessageBox, QLineEdit, 
-                             QComboBox, QFrame, QStackedWidget)
+                             QComboBox, QFrame, QStackedWidget, QSizePolicy)
 from spectral_cube import SpectralCube
 
 # Import our modularized components
@@ -66,6 +66,30 @@ class ChannelMapViewBox(pg.ViewBox):
                             h = current_pos.y() - self.drag_start.y()
                             self.current_roi.setSize([w, h])
                     ev.accept()
+            elif self.parent_tab.is_pv_drawing_mode():
+                if ev.isStart():
+                    self.drag_start = self.mapSceneToView(ev.buttonDownScenePos())
+                    self.current_roi = pg.LineSegmentROI(
+                        [
+                            [self.drag_start.x(), self.drag_start.y()],
+                            [self.drag_start.x() + 0.1, self.drag_start.y() + 0.1],
+                        ],
+                        pen=pg.mkPen('m', width=2),
+                    )
+                    self.addItem(self.current_roi)
+                    ev.accept()
+                elif ev.isFinish():
+                    if self.current_roi:
+                        self.parent_tab.add_pv_cut(self.current_roi)
+                        self.current_roi = None
+                    ev.accept()
+                else:
+                    if self.current_roi:
+                        current_pos = self.mapSceneToView(ev.scenePos())
+                        handles = self.current_roi.getHandles()
+                        if len(handles) > 1:
+                            self.current_roi.movePoint(handles[1], current_pos)
+                    ev.accept()
             else:
                 super().mouseDragEvent(ev, axis)
         else:
@@ -89,25 +113,10 @@ class ChannelMapViewBox(pg.ViewBox):
                 if not hit:
                     for item in self.parent_tab.spatial_rois:
                         roi = item["roi"]
-                        if isinstance(roi, pg.LineSegmentROI):
-                            pts = roi.getSceneHandlePositions()
-                            p_scene = ev.scenePos()
-                            import numpy as np
-                            p = np.array([p_scene.x(), p_scene.y()])
-                            for (p1_local, p1_scene), (p2_local, p2_scene) in zip(pts[:-1], pts[1:]):
-                                p1 = np.array([p1_scene.x(), p1_scene.y()])
-                                p2 = np.array([p2_scene.x(), p2_scene.y()])
-                                l2 = np.sum((p1 - p2)**2)
-                                if l2 == 0:
-                                    t = 0
-                                else:
-                                    t = max(0, min(1, np.dot(p - p1, p2 - p1) / l2))
-                                proj = p1 + t * (p2 - p1)
-                                dist = np.sqrt(np.sum((p - proj)**2))
-                                if dist < 10:
-                                    self.parent_tab.select_spatial_region(roi)
-                                    hit = True
-                                    break
+                        if isinstance(roi, pg.LineSegmentROI) and self.parent_tab.line_roi_hit_test(roi, ev.scenePos()):
+                            self.parent_tab.select_spatial_region(roi)
+                            hit = True
+                            break
                 if hit:
                     ev.accept()
                     return
@@ -119,6 +128,12 @@ class ChannelMapViewBox(pg.ViewBox):
                     self.parent_tab.add_spatial_region(roi, "Point")
                     ev.accept()
                     return
+            elif self.parent_tab.is_pv_drawing_mode():
+                for item in self.parent_tab.pv_cuts:
+                    if self.parent_tab.line_roi_hit_test(item["roi"], ev.scenePos()):
+                        self.parent_tab.select_pv_cut(item["roi"])
+                        ev.accept()
+                        return
                 
         super().mouseClickEvent(ev)
 
@@ -126,6 +141,10 @@ class ChannelMapViewBox(pg.ViewBox):
         if ev.key() == Qt.Key_Escape:
             if self.parent_tab and hasattr(self.parent_tab, 'spatial_rois_to_delete') and self.parent_tab.spatial_rois_to_delete:
                 self.parent_tab.delete_selected_spatial_regions()
+                ev.accept()
+                return
+            if self.parent_tab and hasattr(self.parent_tab, 'pv_cuts_to_delete') and self.parent_tab.pv_cuts_to_delete:
+                self.parent_tab.delete_selected_pv_cuts()
                 ev.accept()
                 return
         super().keyPressEvent(ev)
@@ -235,6 +254,9 @@ class ExplorerTab(QWidget):
         self.roi_selected = False
         self.current_m0_raw = None
         self.active_picker_panel = None 
+        self.pv_data = None
+        self.pv_offset_axis = None
+        self.pv_velocity_axis = None
         
         self.last_clicked_panel_id = 'channel' 
         self.contour_params = {'channel': None, 0: None, 1: None, 2: None}
@@ -407,6 +429,45 @@ class ExplorerTab(QWidget):
         spatial_layout.addWidget(self.plot_spatial_2, stretch=1)
         spatial_layout.addWidget(self.lbl_spatial_stats)
         self.stacked_panel.addWidget(self.spatial_widget)
+
+        self.pv_widget = QWidget()
+        pv_layout = QVBoxLayout(self.pv_widget)
+        pv_layout.setContentsMargins(0, 0, 0, 0)
+
+        pv_controls_layout = QHBoxLayout()
+        self.lbl_pv_cut_sel = QLabel("Select Cut:")
+        self.combo_pv_cuts = QComboBox()
+        self.combo_pv_cuts.addItem("None")
+        self.combo_pv_cuts.currentTextChanged.connect(self.on_pv_cut_selected)
+        self.btn_delete_pv = QPushButton("Delete Selected")
+        self.btn_delete_pv.clicked.connect(self.delete_selected_pv_via_button)
+        pv_controls_layout.addWidget(self.lbl_pv_cut_sel)
+        pv_controls_layout.addWidget(self.combo_pv_cuts)
+        pv_controls_layout.addWidget(self.btn_delete_pv)
+        pv_controls_layout.addStretch()
+        pv_layout.addLayout(pv_controls_layout)
+
+        self.lbl_pv_help = QLabel("Ctrl+drag on the channel map to draw a PV cut.")
+        self.lbl_pv_help.setAlignment(Qt.AlignCenter)
+        self.lbl_pv_help.setStyleSheet("font-size: 12px; color: #aaa;")
+        pv_layout.addWidget(self.lbl_pv_help)
+
+        self.pv_plot_item = pg.PlotItem(title="PV Diagram")
+        self.pv_plot_item.showGrid(x=True, y=True, alpha=0.3)
+        self.pv_plot_item.setLabel('bottom', 'Offset along cut (arcsec)')
+        self.pv_plot_item.setLabel('left', 'Radio Velocity (km/s)')
+        self.pv_view = pg.ImageView(view=self.pv_plot_item)
+        self.pv_view.ui.roiBtn.hide()
+        self.pv_view.ui.menuBtn.hide()
+        self.pv_view.ui.histogram.gradient.loadPreset('turbo')
+        self.pv_view.ui.histogram.setFixedWidth(160)
+        fix_axis_scaling(self.pv_view.ui.histogram.axis)
+        pv_layout.addWidget(self.pv_view, stretch=1)
+
+        self.lbl_hover_pv = QLabel("")
+        self.lbl_hover_pv.setStyleSheet("color: #aaa; font-size: 9.5px;")
+        pv_layout.addWidget(self.lbl_hover_pv)
+        self.stacked_panel.addWidget(self.pv_widget)
         
         self.spectrum_viewbox = SpectrumViewBox()
         self.spectrum_viewbox.parent_tab = self
@@ -511,20 +572,26 @@ class ExplorerTab(QWidget):
         top_half.addWidget(self.frame_spectrum, stretch=7)
         self.spatial_rois = []
         self.spatial_rois_to_delete = []
+        self.pv_cuts = []
+        self.pv_cuts_to_delete = []
         self.frames['spectrum'] = self.frame_spectrum
         main_layout.addLayout(top_half, stretch=1)
 
         # ==================== BOTTOM HALF ====================
         self.bottom_half = QHBoxLayout()
+        self.bottom_half.setSpacing(6)
         self.panels = []
 
-        moment_options = ["Moment 0 (Integrated Intensity)", "Moment 1 (Velocity Field)", 
-                          "Moment 2 (Velocity Dispersion)", "Moment 8 (Peak Intensity)", "Moment 9 (Peak Velocity)"]
+        moment_options = ["Moment 0 (Integrated Intensity)", "Moment 1 (Velocity Field)",
+                          "Moment 2 (Velocity Dispersion)", "Moment 8 (Peak Intensity)",
+                          "Moment 9 (Peak Velocity)", "PV Diagram"]
 
         for i, default_option in enumerate([moment_options[0], moment_options[1], moment_options[2]]):
             panel = {}
             panel_frame = QFrame()
             panel_frame.setObjectName("PanelFrame")
+            panel_frame.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+            panel_frame.setMinimumWidth(0)
             
             panel_layout = QVBoxLayout(panel_frame)
             
@@ -532,8 +599,14 @@ class ExplorerTab(QWidget):
             combo = QComboBox()
             combo.addItems(moment_options)
             combo.setCurrentText(default_option)
+            combo.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+            combo.setMinimumContentsLength(14)
             top_ctrl_layout.addWidget(combo, stretch=1)
             
+            aux_stack = QStackedWidget()
+            aux_stack.setContentsMargins(0, 0, 0, 0)
+            aux_stack.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+
             thresh_widget = QWidget()
             thresh_layout = QHBoxLayout(thresh_widget)
             thresh_layout.setContentsMargins(5, 0, 0, 0)
@@ -551,11 +624,32 @@ class ExplorerTab(QWidget):
             thresh_layout.addWidget(btn_pick)
             thresh_layout.addStretch()
             
-            sp = thresh_widget.sizePolicy()
-            sp.setRetainSizeWhenHidden(True)
-            thresh_widget.setSizePolicy(sp)
+            pv_controls_widget = QWidget()
+            pv_controls_layout = QHBoxLayout(pv_controls_widget)
+            pv_controls_layout.setContentsMargins(5, 0, 0, 0)
+            pv_controls_layout.setSpacing(2)
+            pv_controls_layout.addWidget(QLabel("Cut:"))
+            combo_pv_cut = QComboBox()
+            combo_pv_cut.addItem("None")
+            combo_pv_cut.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+            combo_pv_cut.setMinimumContentsLength(6)
+            combo_pv_cut.setFixedWidth(80)
+            pv_controls_layout.addWidget(combo_pv_cut, stretch=1)
+            pv_controls_layout.addWidget(QLabel("Range:"))
+            combo_pv_range = QComboBox()
+            combo_pv_range.addItems(["Selected Range", "Full Cube"])
+            combo_pv_range.setCurrentText("Selected Range")
+            combo_pv_range.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+            combo_pv_range.setMinimumContentsLength(9)
+            combo_pv_range.setFixedWidth(98)
+            pv_controls_layout.addWidget(combo_pv_range)
+            btn_delete_pv = QPushButton("Del")
+            btn_delete_pv.setFixedWidth(42)
+            pv_controls_layout.addWidget(btn_delete_pv)
 
-            top_ctrl_layout.addWidget(thresh_widget, stretch=1)
+            aux_stack.addWidget(thresh_widget)
+            aux_stack.addWidget(pv_controls_widget)
+            top_ctrl_layout.addWidget(aux_stack, stretch=1)
             panel_layout.addLayout(top_ctrl_layout)
             
             p_bottom = WCSAxisItem(orientation='bottom')
@@ -585,18 +679,28 @@ class ExplorerTab(QWidget):
             panel['combo'] = combo
             panel['view'] = view
             panel['plot_item'] = plot_item
+            panel['aux_stack'] = aux_stack
             panel['thresh_widget'] = thresh_widget
             panel['input_thresh'] = input_thresh
             panel['btn_pick'] = btn_pick
+            panel['pv_controls_widget'] = pv_controls_widget
+            panel['combo_pv_cut'] = combo_pv_cut
+            panel['combo_pv_range'] = combo_pv_range
+            panel['btn_delete_pv'] = btn_delete_pv
             panel['lbl_hover'] = lbl_hover
             panel['current_data'] = None
+            panel['pv_offset_axis'] = None
+            panel['pv_velocity_axis'] = None
             panel['id'] = i
             panel['unit'] = ''
             self.panels.append(panel)
 
             combo.currentTextChanged.connect(self.update_moment_maps)
             input_thresh.editingFinished.connect(self.update_moment_maps)
-            plot_item.scene().sigMouseMoved.connect(lambda pos, p=panel: self.hover_event(pos, p['plot_item'], p['current_data'], p['lbl_hover'], p['id']))
+            combo_pv_cut.currentTextChanged.connect(lambda _text, p_id=i: self.on_panel_pv_cut_selected(p_id))
+            combo_pv_range.currentTextChanged.connect(self.update_moment_maps)
+            btn_delete_pv.clicked.connect(lambda _checked=False, p_id=i: self.delete_panel_pv_cut(p_id))
+            plot_item.scene().sigMouseMoved.connect(lambda pos, p=panel: self.hover_panel(pos, p))
             btn_pick.clicked.connect(lambda checked, p_id=i: self.set_active_picker(checked, p_id))
 
         main_layout.addLayout(self.bottom_half, stretch=1)
@@ -605,9 +709,11 @@ class ExplorerTab(QWidget):
 
         self.plot_channel.scene().sigMouseMoved.connect(lambda pos: self.hover_event(pos, self.plot_channel, self.get_current_channel_data(), self.lbl_hover_ch, 'channel'))
         self.plot_widget.scene().sigMouseMoved.connect(self.hover_spectrum)
+        self.pv_plot_item.scene().sigMouseMoved.connect(self.hover_pv)
         
         self.plot_widget.scene().sigMouseClicked.connect(lambda event: self.universal_click_handler(event, self.plot_widget))
         self.plot_channel.scene().sigMouseClicked.connect(lambda event: self.universal_click_handler(event, self.plot_channel))
+        self.pv_plot_item.scene().sigMouseClicked.connect(lambda _event: self.set_active_panel('spectrum'))
         for p in self.panels:
             p['plot_item'].scene().sigMouseClicked.connect(lambda event, view=p['plot_item']: self.universal_click_handler(event, view))
 
@@ -619,13 +725,214 @@ class ExplorerTab(QWidget):
             self.combo_roi.show()
             self.lbl_spatial_tool.hide()
             self.combo_spatial_tool.hide()
-        else:
+        elif mode == "Spatial Analysis":
             self.stacked_panel.setCurrentWidget(self.spatial_widget)
             self.lbl_combo_roi.hide()
             self.combo_roi.hide()
             self.lbl_spatial_tool.show()
             self.combo_spatial_tool.show()
             self.change_spatial_tool(self.combo_spatial_tool.currentText())
+
+    def any_pv_panels_active(self):
+        return any(panel['combo'].currentText() == "PV Diagram" for panel in self.panels)
+
+    def is_pv_drawing_mode(self):
+        return self.combo_panel_mode.currentText() != "Spatial Analysis" and self.any_pv_panels_active()
+
+    def get_velocity_subset(self, use_full_range=False):
+        if self.cube_clean is None:
+            return None, None, None, None
+        if use_full_range:
+            return self.cube_clean, self.v_axis, float(np.nanmin(self.v_axis)), float(np.nanmax(self.v_axis))
+
+        minX, maxX = self.region.getRegion()
+        search_axis = self.v_axis if self.v_axis[0] < self.v_axis[-1] else self.v_axis[::-1]
+        idx_min = np.searchsorted(search_axis, minX)
+        idx_max = np.searchsorted(search_axis, maxX)
+        if self.v_axis[0] > self.v_axis[-1]:
+            idx_min, idx_max = len(self.v_axis) - idx_max, len(self.v_axis) - idx_min
+        if idx_max <= idx_min:
+            return None, None, minX, maxX
+        return self.cube_clean[idx_min:idx_max, :, :], self.v_axis[idx_min:idx_max], minX, maxX
+
+    def configure_bottom_panel_axes(self, panel, is_pv):
+        plot_item = panel['plot_item']
+        plot_item.invertX(not is_pv)
+        plot_item.invertY(False)
+
+        bottom_axis = plot_item.getAxis('bottom')
+        left_axis = plot_item.getAxis('left')
+        if is_pv:
+            plot_item.setLabel('bottom', 'Offset along cut (arcsec)')
+            plot_item.setLabel('left', 'Radio Velocity (km/s)')
+            if hasattr(bottom_axis, 'update_wcs'):
+                bottom_axis.update_wcs(None, self.nx, self.ny, self.pix_scale_arcsec, False)
+            if hasattr(left_axis, 'update_wcs'):
+                left_axis.update_wcs(None, self.nx, self.ny, self.pix_scale_arcsec, False)
+        else:
+            x_label = 'Right Ascension (J2000)' if self.parent_window.is_absolute_wcs else 'RA offset (arcsec)'
+            y_label = 'Declination (J2000)' if self.parent_window.is_absolute_wcs else 'Dec offset (arcsec)'
+            plot_item.setLabel('bottom', x_label)
+            plot_item.setLabel('left', y_label)
+            if hasattr(bottom_axis, 'update_wcs'):
+                bottom_axis.update_wcs(self.wcs_2d, self.nx, self.ny, self.pix_scale_arcsec, self.parent_window.is_absolute_wcs)
+            if hasattr(left_axis, 'update_wcs'):
+                left_axis.update_wcs(self.wcs_2d, self.nx, self.ny, self.pix_scale_arcsec, self.parent_window.is_absolute_wcs)
+
+    def configure_bottom_panel_controls(self, panel, mode):
+        is_pv = mode == "PV Diagram"
+        panel['aux_stack'].setCurrentWidget(panel['pv_controls_widget'] if is_pv else panel['thresh_widget'])
+        if is_pv:
+            panel['aux_stack'].show()
+            if panel['combo_pv_cut'].currentText() == "None" and self.pv_cuts:
+                preferred = self.get_selected_pv_cut_name() or self.pv_cuts[-1]["name"]
+                panel['combo_pv_cut'].blockSignals(True)
+                panel['combo_pv_cut'].setCurrentText(preferred)
+                panel['combo_pv_cut'].blockSignals(False)
+            if self.active_picker_panel == panel['id']:
+                panel['btn_pick'].setChecked(False)
+                self.active_picker_panel = None
+        else:
+            panel['aux_stack'].setVisible("Moment 0" not in mode)
+
+    def get_pv_cut_by_name(self, name):
+        for item in self.pv_cuts:
+            if item["name"] == name:
+                return item
+        return None
+
+    def get_selected_pv_cut_name(self):
+        if not self.pv_cuts_to_delete:
+            return None
+        for item in self.pv_cuts:
+            if item["roi"] == self.pv_cuts_to_delete[-1]:
+                return item["name"]
+        return None
+
+    def set_selected_pv_cut(self, name):
+        self.pv_cuts_to_delete.clear()
+        for item in self.pv_cuts:
+            is_selected = item["name"] == name
+            if is_selected:
+                self.pv_cuts_to_delete.append(item["roi"])
+            item["roi"].setPen(pg.mkPen('m', width=3) if is_selected else pg.mkPen('c', width=2))
+            direction_item = item.get("direction_item")
+            if direction_item is not None:
+                direction_item.setPen(pg.mkPen('#f1c40f' if is_selected else '#f7dc6f', width=4 if is_selected else 3))
+
+    def refresh_all_pv_cut_combos(self):
+        cut_names = [item["name"] for item in self.pv_cuts]
+        combos = []
+        if hasattr(self, 'combo_pv_cuts'):
+            combos.append(self.combo_pv_cuts)
+        combos.extend(panel['combo_pv_cut'] for panel in self.panels)
+
+        for combo in combos:
+            current = combo.currentText()
+            combo.blockSignals(True)
+            combo.clear()
+            combo.addItem("None")
+            for name in cut_names:
+                combo.addItem(name)
+            combo.setCurrentText(current if current in cut_names else "None")
+            combo.blockSignals(False)
+
+    def on_panel_pv_cut_selected(self, panel_id):
+        name = self.panels[panel_id]['combo_pv_cut'].currentText()
+        if name != "None":
+            self.set_selected_pv_cut(name)
+        self.update_moment_maps()
+
+    def delete_panel_pv_cut(self, panel_id):
+        name = self.panels[panel_id]['combo_pv_cut'].currentText()
+        if name == "None":
+            return
+        self.set_selected_pv_cut(name)
+        self.delete_selected_pv_cuts()
+
+    def clear_panel_pv_diagram(self, panel):
+        panel['current_data'] = None
+        panel['pv_offset_axis'] = None
+        panel['pv_velocity_axis'] = None
+        panel['unit'] = self.display_unit
+        panel['view'].clear()
+        panel['lbl_hover'].setText("")
+        self.draw_contours(panel['id'], panel['view'], None)
+
+    def update_panel_pv_diagram(self, panel):
+        self.configure_bottom_panel_axes(panel, is_pv=True)
+        panel['view'].ui.histogram.gradient.loadPreset('turbo')
+        panel['view'].ui.histogram.axis.setLabel(f"Flux ({self.display_unit})")
+        panel['plot_item'].setTitle("PV Diagram")
+
+        cut_name = panel['combo_pv_cut'].currentText()
+        active_item = self.get_pv_cut_by_name(cut_name)
+        if active_item is None:
+            self.clear_panel_pv_diagram(panel)
+            return
+
+        use_full_range = panel['combo_pv_range'].currentText() == "Full Cube"
+        cube_data, velocity_axis, _, _ = self.get_velocity_subset(use_full_range=use_full_range)
+        if cube_data is None or velocity_axis is None:
+            self.clear_panel_pv_diagram(panel)
+            return
+
+        offsets, pv_data = self.sample_cube_along_line(active_item["roi"], cube_data)
+        if offsets is None or pv_data is None or pv_data.size == 0:
+            self.clear_panel_pv_diagram(panel)
+            return
+
+        sort_idx = np.argsort(velocity_axis)
+        v_sorted = velocity_axis[sort_idx]
+        pv_sorted = pv_data[:, sort_idx]
+        valid = pv_sorted[np.isfinite(pv_sorted)]
+        if valid.size > 0:
+            levels = (float(np.nanmin(valid)), float(np.nanmax(valid)))
+            if levels[0] == levels[1]:
+                levels = (levels[0], levels[0] + 1.0)
+        else:
+            levels = (0.0, 1.0)
+
+        dx = offsets[1] - offsets[0] if len(offsets) > 1 else 1.0
+        dv = v_sorted[1] - v_sorted[0] if len(v_sorted) > 1 else 1.0
+
+        panel['current_data'] = pv_sorted
+        panel['pv_offset_axis'] = offsets
+        panel['pv_velocity_axis'] = v_sorted
+        panel['unit'] = self.display_unit
+        panel['view'].setImage(
+            pv_sorted,
+            autoLevels=False,
+            autoHistogramRange=False,
+            levels=levels,
+            scale=(dx, dv),
+            pos=(0.0, v_sorted[0]),
+        )
+        self.draw_contours(panel['id'], panel['view'], None)
+
+    def hover_panel(self, pos, panel):
+        if panel['combo'].currentText() == "PV Diagram":
+            self.hover_panel_pv(pos, panel)
+        else:
+            self.hover_event(pos, panel['plot_item'], panel['current_data'], panel['lbl_hover'], panel['id'])
+
+    def hover_panel_pv(self, pos, panel):
+        self.clear_all_hover_labels()
+        if panel['current_data'] is None or panel['pv_offset_axis'] is None or panel['pv_velocity_axis'] is None:
+            return
+        if not panel['plot_item'].sceneBoundingRect().contains(pos):
+            return
+
+        mp = panel['plot_item'].vb.mapSceneToView(pos)
+        x_idx = int(np.abs(panel['pv_offset_axis'] - mp.x()).argmin())
+        y_idx = int(np.abs(panel['pv_velocity_axis'] - mp.y()).argmin())
+        if 0 <= x_idx < panel['current_data'].shape[0] and 0 <= y_idx < panel['current_data'].shape[1]:
+            val = panel['current_data'][x_idx, y_idx]
+            val_str = f"{val:.3e}" if (np.isfinite(val) and abs(val) < 1e-3 and abs(val) > 0) else f"{val:.4g}" if np.isfinite(val) else "NaN"
+            panel['lbl_hover'].setText(
+                f"Offset: {panel['pv_offset_axis'][x_idx]:.2f} arcsec | Vel: {panel['pv_velocity_axis'][y_idx]:.2f} km/s | {val_str} {self.display_unit}"
+            )
+            panel['lbl_hover'].setStyleSheet("color: #3498db; font-weight: bold; font-size: 9.5px;")
 
     def change_spatial_tool(self, tool):
         if tool == "Point":
@@ -660,6 +967,25 @@ class ExplorerTab(QWidget):
         roi.setPen(pg.mkPen('y', width=3))
         
         self.update_spatial_analysis()
+
+    def line_roi_hit_test(self, roi, scene_pos, tolerance=10.0):
+        pts = roi.getSceneHandlePositions()
+        if len(pts) < 2:
+            return False
+
+        p = np.array([scene_pos.x(), scene_pos.y()])
+        for (_, p1_scene), (_, p2_scene) in zip(pts[:-1], pts[1:]):
+            p1 = np.array([p1_scene.x(), p1_scene.y()])
+            p2 = np.array([p2_scene.x(), p2_scene.y()])
+            seg_len_sq = np.sum((p2 - p1) ** 2)
+            if seg_len_sq == 0:
+                proj = p1
+            else:
+                t = max(0.0, min(1.0, np.dot(p - p1, p2 - p1) / seg_len_sq))
+                proj = p1 + t * (p2 - p1)
+            if np.linalg.norm(p - proj) < tolerance:
+                return True
+        return False
 
     def on_spatial_region_selected(self, name):
         self.spatial_rois_to_delete.clear()
@@ -707,6 +1033,205 @@ class ExplorerTab(QWidget):
             self.combo_spatial_regions.setCurrentText("None")
             
         self.update_spatial_analysis()
+
+    def add_pv_cut(self, roi):
+        name = f"Cut {len(self.pv_cuts) + 1}"
+        cut_info = {"name": name, "roi": roi}
+        self.pv_cuts.append(cut_info)
+
+        text_item = pg.TextItem(text=name, color=(220, 220, 220, 180), anchor=(0, 1))
+        self.plot_channel.addItem(text_item)
+        direction_item = pg.PlotDataItem(
+            [],
+            [],
+            connect='finite',
+            pen=pg.mkPen('#f7dc6f', width=3),
+        )
+        direction_item.setZValue(20)
+        self.plot_channel.addItem(direction_item)
+
+        def update_annotations(r=roi, t=text_item, a=direction_item):
+            points = self.get_line_roi_points(r)
+            if points is None:
+                return
+            p1, p2 = points
+            vec = p2 - p1
+            length = np.hypot(vec[0], vec[1])
+            if length <= 0:
+                a.setData([], [])
+                return
+
+            unit = vec / length
+            normal = np.array([-unit[1], unit[0]], dtype=float)
+            tip = p1 + 0.62 * vec
+            head_len = min(max(6.0 * self.pix_scale_arcsec, 0.18 * length), 0.32 * length)
+            head_width = 0.75 * head_len
+            base_center = tip - unit * head_len
+            left = base_center + normal * (0.5 * head_width)
+            right = base_center - normal * (0.5 * head_width)
+
+            t.setPos(p2[0], p2[1])
+            a.setData(
+                [left[0], tip[0], np.nan, right[0], tip[0]],
+                [left[1], tip[1], np.nan, right[1], tip[1]],
+            )
+
+        roi.sigRegionChanged.connect(update_annotations)
+        roi.sigRegionChanged.connect(self.update_moment_maps)
+        update_annotations()
+
+        cut_info["text_item"] = text_item
+        cut_info["direction_item"] = direction_item
+        cut_info["update_annotations"] = update_annotations
+
+        self.refresh_all_pv_cut_combos()
+        self.set_selected_pv_cut(name)
+        for panel in self.panels:
+            if panel['combo'].currentText() == "PV Diagram" and panel['combo_pv_cut'].currentText() == "None":
+                panel['combo_pv_cut'].setCurrentText(name)
+        self.update_moment_maps()
+
+    def on_pv_cut_selected(self, name):
+        self.set_selected_pv_cut(name)
+        self.update_moment_maps()
+
+    def select_pv_cut(self, roi):
+        for item in self.pv_cuts:
+            if item["roi"] == roi:
+                self.set_selected_pv_cut(item["name"])
+                active_panel_id = getattr(self, 'last_clicked_panel_id', None)
+                if isinstance(active_panel_id, int):
+                    panel = self.panels[active_panel_id]
+                    if panel['combo'].currentText() == "PV Diagram":
+                        panel['combo_pv_cut'].setCurrentText(item["name"])
+                return
+
+    def delete_selected_pv_via_button(self):
+        self.delete_selected_pv_cuts()
+
+    def delete_selected_pv_cuts(self):
+        for roi in list(self.pv_cuts_to_delete):
+            if roi.scene():
+                roi.scene().removeItem(roi)
+            else:
+                try:
+                    self.view_channel.removeItem(roi)
+                except Exception:
+                    pass
+
+            for i, item in enumerate(self.pv_cuts):
+                if item["roi"] == roi:
+                    text_item = item.get("text_item")
+                    if text_item is not None:
+                        if text_item.scene():
+                            text_item.scene().removeItem(text_item)
+                        else:
+                            self.plot_channel.removeItem(text_item)
+                    direction_item = item.get("direction_item")
+                    if direction_item is not None:
+                        if direction_item.scene():
+                            direction_item.scene().removeItem(direction_item)
+                        else:
+                            self.plot_channel.removeItem(direction_item)
+                    self.pv_cuts.pop(i)
+                    break
+
+        self.pv_cuts_to_delete.clear()
+        for idx, item in enumerate(self.pv_cuts, start=1):
+            item["name"] = f"Cut {idx}"
+            if "text_item" in item:
+                item["text_item"].setText(item["name"])
+        self.refresh_all_pv_cut_combos()
+        if self.pv_cuts:
+            self.set_selected_pv_cut(self.pv_cuts[-1]["name"])
+        else:
+            if hasattr(self, 'combo_pv_cuts'):
+                self.combo_pv_cuts.blockSignals(True)
+                self.combo_pv_cuts.setCurrentText("None")
+                self.combo_pv_cuts.blockSignals(False)
+            for panel in self.panels:
+                panel['combo_pv_cut'].blockSignals(True)
+                panel['combo_pv_cut'].setCurrentText("None")
+                panel['combo_pv_cut'].blockSignals(False)
+                self.clear_panel_pv_diagram(panel)
+            self.pv_data = None
+            self.pv_offset_axis = None
+            self.pv_velocity_axis = None
+            self.pv_view.clear()
+            self.lbl_hover_pv.setText("")
+        self.update_moment_maps()
+
+    def clear_pv_cuts(self):
+        self.pv_cuts_to_delete = [item["roi"] for item in self.pv_cuts]
+        self.delete_selected_pv_cuts()
+
+    def get_line_roi_points(self, roi):
+        pts = roi.getSceneHandlePositions()
+        if len(pts) < 2:
+            return None
+        p1 = self.plot_channel.vb.mapSceneToView(pts[0][1])
+        p2 = self.plot_channel.vb.mapSceneToView(pts[1][1])
+        return np.array([p1.x(), p1.y()], dtype=float), np.array([p2.x(), p2.y()], dtype=float)
+
+    def world_to_pixel(self, x_world, y_world):
+        start_x = (self.nx / 2) * self.pix_scale_arcsec
+        start_y = -(self.ny / 2) * self.pix_scale_arcsec
+        x_pix = (start_x - x_world) / self.pix_scale_arcsec
+        y_pix = (y_world - start_y) / self.pix_scale_arcsec
+        return x_pix, y_pix
+
+    def sample_cube_along_line(self, roi, cube_data=None):
+        points = self.get_line_roi_points(roi)
+        if points is None:
+            return None, None
+        if cube_data is None:
+            cube_data = self.cube_clean
+
+        p1, p2 = points
+        dx_world = p2[0] - p1[0]
+        dy_world = p2[1] - p1[1]
+        length_arcsec = np.hypot(dx_world, dy_world)
+        n_samples = max(int(np.ceil(length_arcsec / max(self.pix_scale_arcsec, 1e-6))) + 1, 2)
+
+        xs = np.linspace(p1[0], p2[0], n_samples)
+        ys = np.linspace(p1[1], p2[1], n_samples)
+        offsets = np.linspace(0.0, length_arcsec, n_samples)
+
+        x_pix, y_pix = self.world_to_pixel(xs, ys)
+        valid = (
+            (x_pix >= 0.0)
+            & (x_pix <= self.nx - 1)
+            & (y_pix >= 0.0)
+            & (y_pix <= self.ny - 1)
+        )
+
+        samples = np.full((cube_data.shape[0], n_samples), np.nan, dtype=float)
+        if np.any(valid):
+            x0 = np.floor(x_pix[valid]).astype(int)
+            y0 = np.floor(y_pix[valid]).astype(int)
+            x1 = np.clip(x0 + 1, 0, self.nx - 1)
+            y1 = np.clip(y0 + 1, 0, self.ny - 1)
+
+            fx = x_pix[valid] - x0
+            fy = y_pix[valid] - y0
+
+            v00 = cube_data[:, x0, y0]
+            v10 = cube_data[:, x1, y0]
+            v01 = cube_data[:, x0, y1]
+            v11 = cube_data[:, x1, y1]
+
+            interp = (
+                (1.0 - fx) * (1.0 - fy) * v00
+                + fx * (1.0 - fy) * v10
+                + (1.0 - fx) * fy * v01
+                + fx * fy * v11
+            )
+            samples[:, valid] = interp
+
+        return offsets, samples.T
+
+    def update_pv_diagram(self, _=None):
+        self.update_moment_maps()
 
     def update_spatial_analysis(self, _=None):
         if self.cube_clean is None: return
@@ -800,12 +1325,12 @@ class ExplorerTab(QWidget):
         x_label = 'Right Ascension (J2000)' if is_absolute else 'RA offset (arcsec)'
         y_label = 'Declination (J2000)' if is_absolute else 'Dec offset (arcsec)'
 
-        plots = [self.plot_channel] + [p['plot_item'] for p in self.panels]
-        for plot in plots:
-            plot.setLabel('bottom', x_label)
-            plot.setLabel('left', y_label)
-            plot.getAxis('bottom').update_wcs(self.wcs_2d, self.nx, self.ny, self.pix_scale_arcsec, is_absolute)
-            plot.getAxis('left').update_wcs(self.wcs_2d, self.nx, self.ny, self.pix_scale_arcsec, is_absolute)
+        self.plot_channel.setLabel('bottom', x_label)
+        self.plot_channel.setLabel('left', y_label)
+        self.plot_channel.getAxis('bottom').update_wcs(self.wcs_2d, self.nx, self.ny, self.pix_scale_arcsec, is_absolute)
+        self.plot_channel.getAxis('left').update_wcs(self.wcs_2d, self.nx, self.ny, self.pix_scale_arcsec, is_absolute)
+        for panel in self.panels:
+            self.configure_bottom_panel_axes(panel, panel['combo'].currentText() == "PV Diagram")
 
     def set_active_panel(self, panel_id):
         self.last_clicked_panel_id = panel_id
@@ -949,13 +1474,51 @@ class ExplorerTab(QWidget):
                 pass
         self.spatial_rois = []
         self.spatial_rois_to_delete = []
+        for cut_info in getattr(self, 'pv_cuts', []):
+            try:
+                self.view_channel.removeItem(cut_info['roi'])
+            except Exception:
+                pass
+            text_item = cut_info.get('text_item')
+            if text_item is not None:
+                try:
+                    self.plot_channel.removeItem(text_item)
+                except Exception:
+                    pass
+            direction_item = cut_info.get('direction_item')
+            if direction_item is not None:
+                try:
+                    self.plot_channel.removeItem(direction_item)
+                except Exception:
+                    pass
+        self.pv_cuts = []
+        self.pv_cuts_to_delete = []
+        self.pv_data = None
+        self.pv_offset_axis = None
+        self.pv_velocity_axis = None
+        if hasattr(self, 'pv_view'):
+            self.pv_view.clear()
+            self.lbl_hover_pv.setText("")
+            self.combo_pv_cuts.blockSignals(True)
+            self.combo_pv_cuts.clear()
+            self.combo_pv_cuts.addItem("None")
+            self.combo_pv_cuts.blockSignals(False)
         if hasattr(self, 'curve_spatial_1'):
             self.curve_spatial_1.setData([], [])
             self.curve_spatial_2.setData([], [])
             self.lbl_spatial_stats.setText("Draw a region to see statistics.")
         self.v_line.hide()
         self.region.hide()
-        for p in self.panels: p['view'].clear()
+        for p in self.panels:
+            p['combo_pv_cut'].blockSignals(True)
+            p['combo_pv_cut'].clear()
+            p['combo_pv_cut'].addItem("None")
+            p['combo_pv_cut'].blockSignals(False)
+            p['combo_pv_range'].setCurrentText("Selected Range")
+            p['current_data'] = None
+            p['pv_offset_axis'] = None
+            p['pv_velocity_axis'] = None
+            p['view'].clear()
         self.clear_all_hover_labels()
         self.contour_params = {'channel': None, 0: None, 1: None, 2: None}
         for k in self.active_contours:
@@ -1227,18 +1790,11 @@ class ExplorerTab(QWidget):
 
     def update_moment_maps(self):
         if self.cube_clean is None: return
-        minX, maxX = self.region.getRegion()
+        selected_cube, sub_v, minX, maxX = self.get_velocity_subset(use_full_range=False)
+        if selected_cube is None or sub_v is None:
+            return
         span = maxX - minX if maxX > minX else 1.0
-        
-        idx_min = np.searchsorted(self.v_axis if self.v_axis[0] < self.v_axis[-1] else self.v_axis[::-1], minX)
-        idx_max = np.searchsorted(self.v_axis if self.v_axis[0] < self.v_axis[-1] else self.v_axis[::-1], maxX)
-        if self.v_axis[0] > self.v_axis[-1]:
-            idx_min, idx_max = len(self.v_axis) - idx_max, len(self.v_axis) - idx_min
-            
-        if idx_max <= idx_min: return
-
-        subcube = self.cube_clean[idx_min:idx_max, :, :]
-        sub_v = self.v_axis[idx_min:idx_max]
+        subcube = selected_cube
         v_broad = sub_v[:, None, None]
 
         with np.errstate(invalid='ignore', divide='ignore'):
@@ -1253,11 +1809,17 @@ class ExplorerTab(QWidget):
             except ValueError: thresh[i] = 0.0
 
         for i, p in enumerate(self.panels):
-            mtype = p['combo'].currentText() 
+            mtype = p['combo'].currentText()
             view = p['view']
             t = thresh[i]
+            self.configure_bottom_panel_controls(p, mtype)
 
-            p['thresh_widget'].setVisible("Moment 0" not in mtype)
+            if mtype == "PV Diagram":
+                self.update_panel_pv_diagram(p)
+                continue
+
+            self.configure_bottom_panel_axes(p, is_pv=False)
+            p['plot_item'].setTitle("")
             is_vel = ("Moment 1" in mtype) or ("Moment 9" in mtype)
             self.apply_cmap(view, is_vel)
 
@@ -1321,7 +1883,8 @@ class ExplorerTab(QWidget):
             self.draw_contours(i, view, data)
 
     def clear_all_hover_labels(self):
-        for lbl in [self.lbl_hover_ch, self.lbl_hover_spec] + [p['lbl_hover'] for p in self.panels]: lbl.setText("")
+        for lbl in [self.lbl_hover_ch, self.lbl_hover_spec, self.lbl_hover_pv] + [p['lbl_hover'] for p in self.panels]:
+            lbl.setText("")
 
     def hover_event(self, pos, plot_item, data_array, active_label, panel_id='channel'):
         self.clear_all_hover_labels()
@@ -1368,6 +1931,24 @@ class ExplorerTab(QWidget):
             val_str = f'{val:.3e}' if (abs(val) < 1e-3 and abs(val)>0) else f'{val:.4g}'
             self.lbl_hover_spec.setText(f"Ch: {idx} | {self.v_axis[idx]:.2f} km/s | {val_str} {self.spec_unit}")
             self.lbl_hover_spec.setStyleSheet("color: #3498db; font-weight: bold; font-size: 9.5px;")
+
+    def hover_pv(self, pos):
+        self.clear_all_hover_labels()
+        if self.pv_data is None or self.pv_offset_axis is None or self.pv_velocity_axis is None:
+            return
+        if not self.pv_plot_item.sceneBoundingRect().contains(pos):
+            return
+
+        mp = self.pv_plot_item.vb.mapSceneToView(pos)
+        x_idx = int(np.abs(self.pv_offset_axis - mp.x()).argmin())
+        y_idx = int(np.abs(self.pv_velocity_axis - mp.y()).argmin())
+        if 0 <= x_idx < self.pv_data.shape[0] and 0 <= y_idx < self.pv_data.shape[1]:
+            val = self.pv_data[x_idx, y_idx]
+            val_str = f"{val:.3e}" if (np.isfinite(val) and abs(val) < 1e-3 and abs(val) > 0) else f"{val:.4g}" if np.isfinite(val) else "NaN"
+            self.lbl_hover_pv.setText(
+                f"Offset: {self.pv_offset_axis[x_idx]:.2f} arcsec | Vel: {self.pv_velocity_axis[y_idx]:.2f} km/s | {val_str} {self.display_unit}"
+            )
+            self.lbl_hover_pv.setStyleSheet("color: #3498db; font-weight: bold; font-size: 9.5px;")
 
     def update_region_ui_visibility(self):
         n = len(self.spectrum_rois)
