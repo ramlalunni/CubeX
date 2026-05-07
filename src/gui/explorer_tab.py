@@ -818,7 +818,7 @@ class ExplorerTab(QWidget):
             item["roi"].setPen(pg.mkPen('m', width=3) if is_selected else pg.mkPen('c', width=2))
             direction_item = item.get("direction_item")
             if direction_item is not None:
-                direction_item.setPen(pg.mkPen('#f1c40f' if is_selected else '#f7dc6f', width=4 if is_selected else 3))
+                direction_item.setPen(pg.mkPen('#f1c40f' if is_selected else '#f7dc6f', width=3 if is_selected else 2))
 
     def refresh_all_pv_cut_combos(self):
         cut_names = [item["name"] for item in self.pv_cuts]
