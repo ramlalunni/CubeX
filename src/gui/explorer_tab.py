@@ -567,7 +567,9 @@ class ExplorerTab(QWidget):
         self.input_vmin.editingFinished.connect(self.update_region_from_text)
         self.input_vmax.editingFinished.connect(self.update_region_from_text)
         self.region.sigRegionChanged.connect(self.update_text_from_region)
-        self.region.sigRegionChanged.connect(self.update_moment_maps)
+        self.region.sigRegionChanged.connect(self._on_region_drag_start)
+        self.region.sigRegionChangeFinished.connect(self._on_region_drag_end)
+        self._region_dragging = False
 
         top_half.addWidget(self.frame_spectrum, stretch=7)
         self.spatial_rois = []
@@ -1788,8 +1790,21 @@ class ExplorerTab(QWidget):
                 if t not in keep:
                     t.hide()
 
+    def _on_region_drag_start(self):
+        """Called on every sigRegionChanged — marks that a drag is in progress."""
+        self._region_dragging = True
+
+    def _on_region_drag_end(self):
+        """Called on sigRegionChangeFinished — clears the drag flag and recomputes."""
+        self._region_dragging = False
+        self.update_moment_maps()
+
+
     def update_moment_maps(self):
         if self.cube_clean is None: return
+        # Skip all recomputation while the velocity window is being dragged;
+        # _on_region_drag_end will call us once when the drag is released.
+        if self._region_dragging: return
         selected_cube, sub_v, minX, maxX = self.get_velocity_subset(use_full_range=False)
         if selected_cube is None or sub_v is None:
             return
