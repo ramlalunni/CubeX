@@ -12,7 +12,7 @@ from PyQt5.QtWidgets import (QApplication, QMainWindow, QAction, QTabWidget,
                              QVBoxLayout, QTextEdit)
 
 # Import the tab environment we built
-from src.gui.explorer_tab import ExplorerTab
+from src.gui.explorer_tab import ExplorerTab, _NUMBA_AVAILABLE
 
 # ==============================================================================
 # MAIN WINDOW APP
@@ -554,4 +554,5 @@ class KinematicExplorerApp(QMainWindow):
         QMessageBox.information(self, "Controls & Shortcuts", sc)
 
     def show_about(self):
-        QMessageBox.about(self, "About CubeX", "<b>CubeX</b><br>A lightweight, real-time ALMA data visualization tool.<br>Powered by PyQt5, PyQtGraph, Matplotlib, Astroquery, and Astropy.")
+        numba_status = "<span style='color: #2ecc71;'>Active</span>" if _NUMBA_AVAILABLE else "<span style='color: #e74c3c;'>Not Installed</span>"
+        QMessageBox.about(self, "About CubeX", f"<b>CubeX</b><br>A lightweight, real-time ALMA data visualization tool.<br>Powered by PyQt5, PyQtGraph, Matplotlib, Astroquery, and Astropy.<br><br><b>Numba Acceleration:</b> {numba_status}")

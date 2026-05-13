@@ -6,16 +6,361 @@ from astropy.io import fits
 from astropy.wcs import WCS
 import astropy.constants as const
 import astropy.units as u
-from PyQt5.QtCore import QTimer, Qt
+from PyQt5.QtCore import QTimer, Qt, QThread, pyqtSignal
 from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
                              QPushButton, QFileDialog, QMessageBox, QLineEdit, 
                              QComboBox, QFrame, QStackedWidget, QSizePolicy)
 from spectral_cube import SpectralCube
 
+# Optional Numba acceleration (graceful fallback to NumPy when not installed)
+try:
+    import numba
+    _NUMBA_AVAILABLE = True
+except ImportError:
+    _NUMBA_AVAILABLE = False
+
 # Import our modularized components
 from src.core.splatalogue import SplatalogueWorker
 from src.gui.custom import JumpSlider, fix_axis_scaling, WCSAxisItem
 from src.gui.dialogs import LineCatalogDialog, LineSelectionDialog, ContourDialog
+
+# ==============================================================================
+# BILINEAR INTERPOLATION KERNEL (Numba-accelerated when available)
+# ==============================================================================
+# The kernel fuses the 4-gather bilinear interpolation into a single pass.
+# Benefits vs. plain NumPy:
+#   • Zero intermediate allocation (no v00/v10/v01/v11 temporaries)
+#   • Parallelised over spectral channels via prange
+#   • cache=True: compiled once, stored in __pycache__, instant on next run
+
+if _NUMBA_AVAILABLE:
+    @numba.njit(parallel=True, fastmath=True, cache=True)
+    def _bilinear_interp_numba(cube, x0, y0, x1, y1, fx, fy, out):
+        """Fill out[nv, n_valid] via bilinear interpolation; no temporaries."""
+        nv = cube.shape[0]
+        n  = x0.shape[0]
+        for v in numba.prange(nv):          # parallel over spectral channels
+            for s in range(n):
+                w00 = (1.0 - fx[s]) * (1.0 - fy[s])
+                w10 =        fx[s]  * (1.0 - fy[s])
+                w01 = (1.0 - fx[s]) *        fy[s]
+                w11 =        fx[s]  *        fy[s]
+                out[v, s] = (
+                    w00 * cube[v, x0[s], y0[s]]
+                    + w10 * cube[v, x1[s], y0[s]]
+                    + w01 * cube[v, x0[s], y1[s]]
+                    + w11 * cube[v, x1[s], y1[s]]
+                )
+
+def _bilinear_interp_numpy(cube, x0, y0, x1, y1, fx, fy, out):
+    """Pure-NumPy fallback: same result as the Numba kernel."""
+    out[:] = (
+        (1.0 - fx) * (1.0 - fy) * cube[:, x0, y0]
+        + fx * (1.0 - fy) * cube[:, x1, y0]
+        + (1.0 - fx) * fy * cube[:, x0, y1]
+        + fx * fy * cube[:, x1, y1]
+    )
+
+if _NUMBA_AVAILABLE:
+    _bilinear_interp = _bilinear_interp_numba
+else:
+    _bilinear_interp = _bilinear_interp_numpy
+
+# ---- Warmup: trigger JIT compilation at import time with a tiny dummy ----
+# cache=True means this only blocks on the very first run after installation;
+# subsequent runs load pre-compiled native code and return in microseconds.
+if _NUMBA_AVAILABLE:
+    _wup_cube = np.zeros((2, 2, 2), dtype=np.float64)
+    _wup_x0   = np.array([0], dtype=np.int64)
+    _wup_y0   = np.array([0], dtype=np.int64)
+    _wup_x1   = np.array([1], dtype=np.int64)
+    _wup_y1   = np.array([1], dtype=np.int64)
+    _wup_fx   = np.array([0.5], dtype=np.float64)
+    _wup_fy   = np.array([0.5], dtype=np.float64)
+    _wup_out  = np.zeros((2, 1), dtype=np.float64)
+    _bilinear_interp_numba(_wup_cube, _wup_x0, _wup_y0, _wup_x1, _wup_y1,
+                           _wup_fx, _wup_fy, _wup_out)
+    del _wup_cube, _wup_x0, _wup_y0, _wup_x1, _wup_y1, _wup_fx, _wup_fy, _wup_out
+
+
+# ==============================================================================
+# FUSED MOMENT 1 / MOMENT 2 KERNEL (Numba-accelerated when available)
+# ==============================================================================
+# Computes M1 (velocity field) and M2 (velocity dispersion) in a single pass
+# over the spectral axis, accumulating sum_w, sum_wv, sum_wvv per pixel.
+# Eliminates three separate nansum calls and two (Nv,Nx,Ny) intermediate arrays.
+
+if _NUMBA_AVAILABLE:
+    @numba.njit(parallel=True, fastmath=True, cache=True)
+    def _compute_moments_12_numba(mc, v_axis):
+        """Single-pass kernel: returns (m1_map, m2_map) each (Nx, Ny).
+
+        mc:     (Nv, Nx, Ny) float64 — NaN where below intensity threshold.
+        v_axis: (Nv,) float64        — velocity values in km/s.
+        """
+        nv, nx, ny = mc.shape
+        m1_out = np.full((nx, ny), np.nan)
+        m2_out = np.full((nx, ny), np.nan)
+        for x in numba.prange(nx):          # parallel over RA pixels
+            for y in range(ny):
+                sw = 0.0; swv = 0.0; swvv = 0.0
+                for v in range(nv):
+                    val = mc[v, x, y]
+                    if not np.isnan(val):
+                        vv    = v_axis[v]
+                        sw   += val
+                        swv  += val * vv
+                        swvv += val * vv * vv
+                if sw != 0.0:
+                    m1         = swv / sw
+                    variance   = swvv / sw - m1 * m1
+                    m1_out[x, y] = m1
+                    m2_out[x, y] = np.sqrt(variance if variance >= 0.0 else 0.0)
+        return m1_out, m2_out
+
+def _compute_moments_12_numpy(mc, v_axis):
+    """NumPy fallback using tensordot for BLAS-accelerated weighted sums.
+
+    Strategy vs. the old nansum approach:
+      • Replace NaN→0 once (np.where) instead of letting each nansum scan for NaN.
+      • Use np.tensordot to contract the spectral axis: NumPy internally reshapes
+        mc_nz to (Nv, Nx*Ny) and calls a BLAS dgemm — much faster than
+        nansum(mc * v_broad, axis=0) which allocates a full (Nv,Nx,Ny) intermediate.
+      • Moment 2 via the computational variance formula  Var = E[v²] – E[v]²,
+        eliminating two more (Nv,Nx,Ny) intermediates (v_broad–m1 and mc*(…)²).
+    """
+    mc_nz = np.where(np.isnan(mc), 0.0, mc)          # NaN→0, single pass
+    with np.errstate(invalid='ignore', divide='ignore'):
+        m0      = mc_nz.sum(axis=0)                   # sum(axis=0) uses SIMD/BLAS
+        m0_safe = np.where(m0 != 0, m0, np.nan)
+        # tensordot contracts along spectral axis (dim 0 of mc_nz, dim 0 of v_axis)
+        sum_wv  = np.tensordot(v_axis,          mc_nz, axes=([0], [0]))  # (Nx,Ny)
+        sum_wv2 = np.tensordot(v_axis ** 2,     mc_nz, axes=([0], [0]))  # (Nx,Ny)
+        m1 = sum_wv  / m0_safe
+        m2 = np.sqrt(np.maximum(sum_wv2 / m0_safe - m1 ** 2, 0.0))
+    return m1, m2
+
+if _NUMBA_AVAILABLE:
+    _compute_moments_12 = _compute_moments_12_numba
+else:
+    _compute_moments_12 = _compute_moments_12_numpy
+
+# Warmup — fires at import; cache=True makes this instant on subsequent runs.
+if _NUMBA_AVAILABLE:
+    _wup2_mc = np.zeros((2, 2, 2), dtype=np.float64)
+    _wup2_v  = np.array([0.0, 1.0], dtype=np.float64)
+    _compute_moments_12_numba(_wup2_mc, _wup2_v)
+    del _wup2_mc, _wup2_v
+
+
+# ==============================================================================
+# BACKGROUND WORKER — moment maps & PV diagrams
+# ==============================================================================
+
+class MomentWorker(QThread):
+    """
+    Computes all moment maps and PV diagram data in a background thread.
+    No Qt or PyQtGraph calls are made here — only plain NumPy.
+    Emits result_ready(dict) when finished, or returns silently if cancelled.
+    """
+    result_ready = pyqtSignal(dict)
+
+    def __init__(self, params: dict, generation: int):
+        super().__init__()
+        self.params = params
+        self.generation = generation
+        self._cancelled = False
+
+    def cancel(self):
+        self._cancelled = True
+
+    # ------------------------------------------------------------------
+    def run(self):
+        p = self.params
+        selected_cube = p['selected_cube']   # (Nv, Nx, Ny) numpy array
+        sub_v         = p['sub_v']
+        minX, maxX    = p['minX'], p['maxX']
+        nx, ny        = p['nx'], p['ny']
+        pix_scale     = p['pix_scale_arcsec']
+        display_unit  = p['display_unit']
+        panel_configs = p['panel_configs']
+
+        span     = maxX - minX if maxX > minX else 1.0
+        sub_v_f64 = sub_v.astype(np.float64)  # 1-D velocity axis for Numba kernels
+
+        with np.errstate(invalid='ignore', divide='ignore'):
+            m0_raw = np.nansum(selected_cube, axis=0)
+
+        if self._cancelled:
+            return
+
+        panel_results = []
+        for cfg in panel_configs:
+            if self._cancelled:
+                return
+
+            mtype = cfg['mtype']
+
+            # ---- PV Diagram ----
+            if mtype == 'PV Diagram':
+                pv_points  = cfg.get('pv_points')
+                pv_cube    = cfg.get('pv_cube')
+                pv_sub_v   = cfg.get('pv_sub_v')
+
+                if pv_points is None or pv_cube is None or pv_sub_v is None:
+                    panel_results.append({'mtype': mtype, 'data': None})
+                    continue
+
+                p1, p2 = pv_points
+                offsets, pv_data = MomentWorker._sample_along_line(
+                    p1, p2, pv_cube, nx, ny, pix_scale
+                )
+                if offsets is None or pv_data is None or pv_data.size == 0:
+                    panel_results.append({'mtype': mtype, 'data': None})
+                    continue
+
+                sort_idx = np.argsort(pv_sub_v)
+                v_sorted = pv_sub_v[sort_idx]
+                pv_sorted = pv_data[:, sort_idx]
+
+                valid = pv_sorted[np.isfinite(pv_sorted)]
+                if valid.size > 0:
+                    levels = (float(np.nanmin(valid)), float(np.nanmax(valid)))
+                    if levels[0] == levels[1]:
+                        levels = (levels[0], levels[0] + 1.0)
+                else:
+                    levels = (0.0, 1.0)
+
+                dx = offsets[1] - offsets[0] if len(offsets) > 1 else 1.0
+                dv = v_sorted[1] - v_sorted[0] if len(v_sorted) > 1 else 1.0
+
+                panel_results.append({
+                    'mtype':    mtype,
+                    'data':     pv_sorted,
+                    'offsets':  offsets,
+                    'v_sorted': v_sorted,
+                    'levels':   levels,
+                    'dx': dx, 'dv': dv,
+                })
+                continue
+
+            # ---- Moment maps ----
+            t    = cfg['threshold']
+            mask = (m0_raw > t)[np.newaxis, :, :]
+            mc   = np.where(mask, selected_cube, np.nan)
+            is_all_nan = np.isnan(mc).all()
+
+            with np.errstate(invalid='ignore', divide='ignore'):
+                if 'Moment 0' in mtype:
+                    data = m0_raw.copy()
+                    data[data == 0] = np.nan
+                    levels   = (0, float(np.nanmax(data)) if not np.isnan(data).all() else 1.0)
+                    unit_str = f"{display_unit} km/s"
+
+                elif 'Moment 1' in mtype:
+                    if is_all_nan:
+                        data = np.full(m0_raw.shape, np.nan)
+                    else:
+                        mc_f64 = np.ascontiguousarray(mc, dtype=np.float64)
+                        data, _ = _compute_moments_12(mc_f64, sub_v_f64)
+                    levels   = (minX, maxX)
+                    unit_str = 'km/s'
+
+                elif 'Moment 2' in mtype:
+                    if is_all_nan:
+                        data = np.full(m0_raw.shape, np.nan)
+                    else:
+                        mc_f64 = np.ascontiguousarray(mc, dtype=np.float64)
+                        _, data = _compute_moments_12(mc_f64, sub_v_f64)
+                    levels   = (0, span / 2)
+                    unit_str = 'km/s'
+
+                elif 'Moment 8' in mtype:
+                    if is_all_nan:
+                        data = np.full(m0_raw.shape, np.nan)
+                    else:
+                        data = np.nanmax(mc, axis=0)
+                    levels   = (0, float(np.nanmax(data)) if not np.isnan(data).all() else 1.0)
+                    unit_str = display_unit
+
+                elif 'Moment 9' in mtype:
+                    if is_all_nan:
+                        data = np.full(m0_raw.shape, np.nan)
+                    else:
+                        safe = np.copy(mc)
+                        safe[np.isnan(safe)] = -np.inf
+                        pidx = np.argmax(safe, axis=0)
+                        data = sub_v[pidx]
+                        m0   = np.nansum(mc, axis=0)
+                        data[m0 == 0] = np.nan
+                    levels   = (minX, maxX)
+                    unit_str = 'km/s'
+
+                else:
+                    data     = np.full(m0_raw.shape, np.nan)
+                    levels   = (0.0, 1.0)
+                    unit_str = ''
+
+            panel_results.append({
+                'mtype':    mtype,
+                'data':     data,
+                'levels':   levels,
+                'unit_str': unit_str,
+            })
+
+        if self._cancelled:
+            return
+
+        self.result_ready.emit({
+            'generation':    self.generation,
+            'm0_raw':        m0_raw,
+            'panel_results': panel_results,
+            'minX': minX, 'maxX': maxX,
+        })
+
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _sample_along_line(p1, p2, cube_data, nx, ny, pix_scale_arcsec):
+        """
+        Pure-NumPy bilinear interpolation along a line through the cube.
+        p1, p2 are world-coordinate arrays [x_arcsec, y_arcsec].
+        Returns (offsets, samples.T) exactly as the Qt-dependent
+        sample_cube_along_line does, but with no Qt dependencies.
+        """
+        dx_w = p2[0] - p1[0]
+        dy_w = p2[1] - p1[1]
+        length_arcsec = np.hypot(dx_w, dy_w)
+        n_samples = max(int(np.ceil(length_arcsec / max(pix_scale_arcsec, 1e-6))) + 1, 2)
+
+        xs = np.linspace(p1[0], p2[0], n_samples)
+        ys = np.linspace(p1[1], p2[1], n_samples)
+        offsets = np.linspace(0.0, length_arcsec, n_samples)
+
+        # world_to_pixel (inline)
+        start_x = (nx / 2) * pix_scale_arcsec
+        start_y = -(ny / 2) * pix_scale_arcsec
+        x_pix = (start_x - xs) / pix_scale_arcsec
+        y_pix = (ys - start_y) / pix_scale_arcsec
+
+        valid = (
+            (x_pix >= 0.0) & (x_pix <= nx - 1) &
+            (y_pix >= 0.0) & (y_pix <= ny - 1)
+        )
+        nv = cube_data.shape[0]
+        samples = np.full((nv, n_samples), np.nan, dtype=np.float64)
+        if np.any(valid):
+            x0 = np.floor(x_pix[valid]).astype(np.int64)
+            y0 = np.floor(y_pix[valid]).astype(np.int64)
+            x1 = np.clip(x0 + 1, 0, nx - 1).astype(np.int64)
+            y1 = np.clip(y0 + 1, 0, ny - 1).astype(np.int64)
+            fx = (x_pix[valid] - x0).astype(np.float64)
+            fy = (y_pix[valid] - y0).astype(np.float64)
+            buf = np.ascontiguousarray(cube_data, dtype=np.float64)
+            out = np.empty((nv, int(valid.sum())), dtype=np.float64)
+            _bilinear_interp(buf, x0, y0, x1, y1, fx, fy, out)
+            samples[:, valid] = out
+        return offsets, samples.T
+
 
 # ==============================================================================
 # INDIVIDUAL EXPLORER TAB
@@ -43,8 +388,24 @@ class ChannelMapViewBox(pg.ViewBox):
                         self.current_roi = pg.LineSegmentROI([[self.drag_start.x(), self.drag_start.y()], [self.drag_start.x() + 0.1, self.drag_start.y() + 0.1]], pen=pg.mkPen('c', width=2))
                     elif tool == "Rectangle":
                         self.current_roi = pg.RectROI([self.drag_start.x(), self.drag_start.y()], [1e-5, 1e-5], pen=pg.mkPen('c', width=2))
-                    elif tool == "Circle":
-                        self.current_roi = pg.CircleROI([self.drag_start.x(), self.drag_start.y()], [1e-5, 1e-5], pen=pg.mkPen('c', width=2))
+                        self.current_roi.addScaleHandle([0, 0], [1, 1])
+                        self.current_roi.addScaleHandle([1, 1], [0, 0])
+                        self.current_roi.addScaleHandle([0, 1], [1, 0])
+                        self.current_roi.addScaleHandle([1, 0], [0, 1])
+                        self.current_roi.addScaleHandle([0.5, 0], [0.5, 1])
+                        self.current_roi.addScaleHandle([0.5, 1], [0.5, 0])
+                        self.current_roi.addScaleHandle([0, 0.5], [1, 0.5])
+                        self.current_roi.addScaleHandle([1, 0.5], [0, 0.5])
+                    elif tool == "Ellipse":
+                        self.current_roi = pg.EllipseROI([self.drag_start.x(), self.drag_start.y()], [1e-5, 1e-5], pen=pg.mkPen('c', width=2))
+                        self.current_roi.addScaleHandle([0, 0], [1, 1])
+                        self.current_roi.addScaleHandle([1, 1], [0, 0])
+                        self.current_roi.addScaleHandle([0, 1], [1, 0])
+                        self.current_roi.addScaleHandle([1, 0], [0, 1])
+                        self.current_roi.addScaleHandle([0.5, 0], [0.5, 1])
+                        self.current_roi.addScaleHandle([0.5, 1], [0.5, 0])
+                        self.current_roi.addScaleHandle([0, 0.5], [1, 0.5])
+                        self.current_roi.addScaleHandle([1, 0.5], [0, 0.5])
                     
                     if self.current_roi:
                         self.addItem(self.current_roi)
@@ -265,7 +626,11 @@ class ExplorerTab(QWidget):
         self.playback_timer = QTimer()
         self.playback_timer.timeout.connect(self.step_channel)
         self.play_direction = 1
-        
+
+        # Background worker for moment / PV computation
+        self._moment_worker = None
+        self._moment_generation = 0
+
         self.initUI()
 
     def initUI(self):
@@ -347,15 +712,21 @@ class ExplorerTab(QWidget):
         roi_layout.addWidget(self.lbl_combo_roi)
         self.combo_roi = QComboBox()
         self.combo_roi.setFixedHeight(22)
-        self.combo_roi.addItems(["Whole Map", "Point (Beam)", "Circle", "Rectangle", "Custom Polygon"])
+        self.combo_roi.addItems(["Whole Map", "Point (Beam)", "Ellipse", "Rectangle", "Custom Polygon"])
         self.combo_roi.currentTextChanged.connect(self.change_roi)
         roi_layout.addWidget(self.combo_roi)
+        
+        self.btn_edit_region = QPushButton("Edit region")
+        self.btn_edit_region.setFixedHeight(22)
+        self.btn_edit_region.hide()
+        self.btn_edit_region.clicked.connect(self.open_edit_region_dialog)
+        roi_layout.addWidget(self.btn_edit_region)
 
         self.lbl_spatial_tool = QLabel("Spatial Analysis Tool:")
         roi_layout.addWidget(self.lbl_spatial_tool)
         self.combo_spatial_tool = QComboBox()
         self.combo_spatial_tool.setFixedHeight(22)
-        self.combo_spatial_tool.addItems(["Point", "Line", "Rectangle", "Circle"])
+        self.combo_spatial_tool.addItems(["Point", "Line", "Rectangle", "Ellipse"])
         self.combo_spatial_tool.currentTextChanged.connect(self.change_spatial_tool)
         roi_layout.addWidget(self.combo_spatial_tool)
         
@@ -1207,28 +1578,19 @@ class ExplorerTab(QWidget):
             & (y_pix <= self.ny - 1)
         )
 
-        samples = np.full((cube_data.shape[0], n_samples), np.nan, dtype=float)
+        nv = cube_data.shape[0]
+        samples = np.full((nv, n_samples), np.nan, dtype=np.float64)
         if np.any(valid):
-            x0 = np.floor(x_pix[valid]).astype(int)
-            y0 = np.floor(y_pix[valid]).astype(int)
-            x1 = np.clip(x0 + 1, 0, self.nx - 1)
-            y1 = np.clip(y0 + 1, 0, self.ny - 1)
-
-            fx = x_pix[valid] - x0
-            fy = y_pix[valid] - y0
-
-            v00 = cube_data[:, x0, y0]
-            v10 = cube_data[:, x1, y0]
-            v01 = cube_data[:, x0, y1]
-            v11 = cube_data[:, x1, y1]
-
-            interp = (
-                (1.0 - fx) * (1.0 - fy) * v00
-                + fx * (1.0 - fy) * v10
-                + (1.0 - fx) * fy * v01
-                + fx * fy * v11
-            )
-            samples[:, valid] = interp
+            x0 = np.floor(x_pix[valid]).astype(np.int64)
+            y0 = np.floor(y_pix[valid]).astype(np.int64)
+            x1 = np.clip(x0 + 1, 0, self.nx - 1).astype(np.int64)
+            y1 = np.clip(y0 + 1, 0, self.ny - 1).astype(np.int64)
+            fx = (x_pix[valid] - x0).astype(np.float64)
+            fy = (y_pix[valid] - y0).astype(np.float64)
+            buf = np.ascontiguousarray(cube_data, dtype=np.float64)
+            out = np.empty((nv, int(valid.sum())), dtype=np.float64)
+            _bilinear_interp(buf, x0, y0, x1, y1, fx, fy, out)
+            samples[:, valid] = out
 
         return offsets, samples.T
 
@@ -1699,9 +2061,34 @@ class ExplorerTab(QWidget):
             self.current_roi = None
         cx, cy = 0, 0 
         sz = self.nx * self.pix_scale_arcsec * 0.2
+        
+        if hasattr(self, 'btn_edit_region'):
+            if roi_type in ["Ellipse", "Rectangle"]:
+                self.btn_edit_region.show()
+            else:
+                self.btn_edit_region.hide()
+                
         if roi_type == "Point (Beam)": self.current_roi = pg.CircleROI([cx, cy], [self.pix_scale_arcsec*3, self.pix_scale_arcsec*3], pen='#f1c40f')
-        elif roi_type == "Circle": self.current_roi = pg.CircleROI([cx, cy], [sz, sz], pen='#f1c40f')
-        elif roi_type == "Rectangle": self.current_roi = pg.RectROI([cx, cy], [sz, sz], pen='#f1c40f')
+        elif roi_type == "Ellipse": 
+            self.current_roi = pg.EllipseROI([cx, cy], [sz, sz], pen='#f1c40f')
+            self.current_roi.addScaleHandle([0, 0], [1, 1])
+            self.current_roi.addScaleHandle([1, 1], [0, 0])
+            self.current_roi.addScaleHandle([0, 1], [1, 0])
+            self.current_roi.addScaleHandle([1, 0], [0, 1])
+            self.current_roi.addScaleHandle([0.5, 0], [0.5, 1])
+            self.current_roi.addScaleHandle([0.5, 1], [0.5, 0])
+            self.current_roi.addScaleHandle([0, 0.5], [1, 0.5])
+            self.current_roi.addScaleHandle([1, 0.5], [0, 0.5])
+        elif roi_type == "Rectangle": 
+            self.current_roi = pg.RectROI([cx, cy], [sz, sz], pen='#f1c40f')
+            self.current_roi.addScaleHandle([0, 0], [1, 1])
+            self.current_roi.addScaleHandle([1, 1], [0, 0])
+            self.current_roi.addScaleHandle([0, 1], [1, 0])
+            self.current_roi.addScaleHandle([1, 0], [0, 1])
+            self.current_roi.addScaleHandle([0.5, 0], [0.5, 1])
+            self.current_roi.addScaleHandle([0.5, 1], [0.5, 0])
+            self.current_roi.addScaleHandle([0, 0.5], [1, 0.5])
+            self.current_roi.addScaleHandle([1, 0.5], [0, 0.5])
         elif roi_type == "Custom Polygon": self.current_roi = pg.PolyLineROI([[cx, cy], [cx+sz, cy], [cx+sz/2, cy+sz]], closed=True, pen='#f1c40f')
         if self.current_roi is not None:
             self.view_channel.addItem(self.current_roi)
@@ -1715,6 +2102,12 @@ class ExplorerTab(QWidget):
         if hasattr(self, 'spatial_rois_to_delete'):
             self.spatial_rois_to_delete = [item["roi"] for item in self.spatial_rois]
             self.delete_selected_spatial_regions()
+
+    def open_edit_region_dialog(self):
+        if self.current_roi is None: return
+        from src.gui.dialogs import RegionPropertiesDialog
+        self._region_dialog = RegionPropertiesDialog(self.current_roi, self)
+        self._region_dialog.show()
 
     def update_spectrum(self):
         if self.cube_clean is None: return
@@ -1801,101 +2194,166 @@ class ExplorerTab(QWidget):
 
 
     def update_moment_maps(self):
-        if self.cube_clean is None: return
-        # Skip all recomputation while the velocity window is being dragged;
-        # _on_region_drag_end will call us once when the drag is released.
-        if self._region_dragging: return
+        """Entry point (runs on the Qt main thread).
+
+        Gathers all Qt-side inputs, performs cheap UI configuration, then
+        dispatches the heavy NumPy work to MomentWorker running in a
+        background thread.  Results are delivered via _on_moment_result.
+        """
+        if self.cube_clean is None:
+            return
+        # Skip while the velocity region handle is being actively dragged;
+        # _on_region_drag_end fires update_moment_maps once on release.
+        if self._region_dragging:
+            return
+
         selected_cube, sub_v, minX, maxX = self.get_velocity_subset(use_full_range=False)
         if selected_cube is None or sub_v is None:
             return
-        span = maxX - minX if maxX > minX else 1.0
-        subcube = selected_cube
-        v_broad = sub_v[:, None, None]
 
-        with np.errstate(invalid='ignore', divide='ignore'):
-            self.current_m0_raw = np.nansum(subcube, axis=0)
+        # ---- Cancel any in-flight worker --------------------------------
+        if self._moment_worker is not None and self._moment_worker.isRunning():
+            self._moment_worker.cancel()
+        self._moment_generation += 1
+        current_gen = self._moment_generation
 
-        pos_tup = ((self.nx / 2) * self.pix_scale_arcsec, -(self.ny / 2) * self.pix_scale_arcsec)
-        scale_tup = (-self.pix_scale_arcsec, self.pix_scale_arcsec)
-
-        thresh = [0.0]*3
+        # ---- Read thresholds from widgets (Qt, main thread) -------------
+        thresh = []
         for i in range(3):
-            try: thresh[i] = float(self.panels[i]['input_thresh'].text())
-            except ValueError: thresh[i] = 0.0
+            try:
+                thresh.append(float(self.panels[i]['input_thresh'].text()))
+            except ValueError:
+                thresh.append(0.0)
 
+        # ---- Cheap UI configuration (axes, colormaps) -------------------
         for i, p in enumerate(self.panels):
             mtype = p['combo'].currentText()
-            view = p['view']
-            t = thresh[i]
             self.configure_bottom_panel_controls(p, mtype)
+            if mtype != 'PV Diagram':
+                self.configure_bottom_panel_axes(p, is_pv=False)
+                p['plot_item'].setTitle('')
+                is_vel = ('Moment 1' in mtype) or ('Moment 9' in mtype)
+                self.apply_cmap(p['view'], is_vel)
 
-            if mtype == "PV Diagram":
-                self.update_panel_pv_diagram(p)
-                continue
+        # ---- Extract ROI world-coordinates for PV panels ----------------
+        # (get_line_roi_points uses Qt, must stay on main thread)
+        panel_configs = []
+        for i, p in enumerate(self.panels):
+            mtype = p['combo'].currentText()
+            cfg = {'mtype': mtype, 'threshold': thresh[i]}
 
-            self.configure_bottom_panel_axes(p, is_pv=False)
-            p['plot_item'].setTitle("")
-            is_vel = ("Moment 1" in mtype) or ("Moment 9" in mtype)
-            self.apply_cmap(view, is_vel)
+            if mtype == 'PV Diagram':
+                cut_name  = p['combo_pv_cut'].currentText()
+                active_item = self.get_pv_cut_by_name(cut_name)
+                if active_item is not None:
+                    points = self.get_line_roi_points(active_item['roi'])
+                    use_full = p['combo_pv_range'].currentText() == 'Full Cube'
+                    cfg['pv_points'] = points           # (p1, p2) numpy arrays or None
+                    cfg['pv_cube']   = self.cube_clean if use_full else selected_cube
+                    cfg['pv_sub_v']  = self.v_axis     if use_full else sub_v
+                else:
+                    cfg['pv_points'] = None
 
-            mask = (self.current_m0_raw > t)[np.newaxis, :, :]
-            mc = np.where(mask, subcube, np.nan)
-            is_all_nan = np.isnan(mc).all()
+            panel_configs.append(cfg)
 
-            with np.errstate(invalid='ignore', divide='ignore'):
-                if "Moment 0" in mtype:
-                    data = self.current_m0_raw.copy(); data[data == 0] = np.nan
-                    levels = (0, np.nanmax(data) if not np.isnan(data).all() else 1.0)
-                    unit_str = f"{self.display_unit} km/s"
+        # ---- Dispatch to background worker ------------------------------
+        worker_params = {
+            'selected_cube':  selected_cube,
+            'sub_v':          sub_v,
+            'minX':           minX,
+            'maxX':           maxX,
+            'nx':             self.nx,
+            'ny':             self.ny,
+            'pix_scale_arcsec': self.pix_scale_arcsec,
+            'display_unit':   self.display_unit,
+            'panel_configs':  panel_configs,
+        }
+        self._moment_worker = MomentWorker(worker_params, current_gen)
+        self._moment_worker.result_ready.connect(self._on_moment_result)
+        self._moment_worker.start()
+
+    def _on_moment_result(self, results: dict):
+        """Receives computed moment/PV data from MomentWorker and updates the UI.
+        Runs on the Qt main thread via the signal/slot mechanism.
+        """
+        # Discard results from a superseded (cancelled) worker.
+        if results['generation'] != self._moment_generation:
+            return
+        if self.cube_clean is None:
+            return
+
+        self.current_m0_raw = results['m0_raw']
+        minX = results['minX']
+        maxX = results['maxX']
+
+        pos_tup   = ((self.nx / 2) * self.pix_scale_arcsec, -(self.ny / 2) * self.pix_scale_arcsec)
+        scale_tup = (-self.pix_scale_arcsec, self.pix_scale_arcsec)
+
+        for p, pr in zip(self.panels, results['panel_results']):
+            mtype = pr['mtype']
+            panel_id = self.panels.index(p)
+
+            if mtype == 'PV Diagram':
+                if pr.get('data') is None:
+                    self.clear_panel_pv_diagram(p)
+                else:
+                    pv_sorted = pr['data']
+                    offsets   = pr['offsets']
+                    v_sorted  = pr['v_sorted']
+                    levels    = pr['levels']
+                    dx, dv    = pr['dx'], pr['dv']
+
+                    self.configure_bottom_panel_axes(p, is_pv=True)
+                    p['view'].ui.histogram.gradient.loadPreset('turbo')
+                    p['view'].ui.histogram.axis.setLabel(f"Flux ({self.display_unit})")
+                    p['plot_item'].setTitle('PV Diagram')
+
+                    p['current_data']       = pv_sorted
+                    p['pv_offset_axis']     = offsets
+                    p['pv_velocity_axis']   = v_sorted
+                    p['unit']               = self.display_unit
+
+                    p['view'].setImage(
+                        pv_sorted,
+                        autoLevels=False,
+                        autoHistogramRange=False,
+                        levels=levels,
+                        scale=(dx, dv),
+                        pos=(0.0, v_sorted[0]),
+                    )
+                    self.draw_contours(panel_id, p['view'], None)
+
+            else:
+                data     = pr.get('data')
+                levels   = pr.get('levels', (0.0, 1.0))
+                unit_str = pr.get('unit_str', '')
+
+                # Histogram axis label
+                view = p['view']
+                if 'Moment 0' in mtype:
                     view.ui.histogram.axis.setLabel(f"Flux ({unit_str})")
-                    p['unit'] = unit_str
-                    
-                elif "Moment 1" in mtype:
-                    if is_all_nan: data = np.full(self.current_m0_raw.shape, np.nan)
-                    else:
-                        m0 = np.nansum(mc, axis=0); m0[m0 == 0] = np.nan
-                        data = np.nansum(mc * v_broad, axis=0) / m0
-                    levels = (minX, maxX)
-                    unit_str = "km/s"
-                    view.ui.histogram.axis.setLabel("Velocity (km/s)")
-                    p['unit'] = unit_str
-                    
-                elif "Moment 2" in mtype:
-                    if is_all_nan: data = np.full(self.current_m0_raw.shape, np.nan)
-                    else:
-                        m0 = np.nansum(mc, axis=0); m0[m0 == 0] = np.nan
-                        m1 = np.nansum(mc * v_broad, axis=0) / m0
-                        data = np.sqrt(np.nansum(mc * (v_broad - m1)**2, axis=0) / m0)
-                    levels = (0, span/2)
-                    unit_str = "km/s"
-                    view.ui.histogram.axis.setLabel("Dispersion (km/s)")
-                    p['unit'] = unit_str
-                    
-                elif "Moment 8" in mtype:
-                    if is_all_nan: data = np.full(self.current_m0_raw.shape, np.nan)
-                    else: data = np.nanmax(mc, axis=0)
-                    levels = (0, np.nanmax(data) if not np.isnan(data).all() else 1.0)
-                    unit_str = self.display_unit
+                elif 'Moment 1' in mtype:
+                    view.ui.histogram.axis.setLabel('Velocity (km/s)')
+                elif 'Moment 2' in mtype:
+                    view.ui.histogram.axis.setLabel('Dispersion (km/s)')
+                elif 'Moment 8' in mtype:
                     view.ui.histogram.axis.setLabel(f"Peak Flux ({unit_str})")
-                    p['unit'] = unit_str
-                    
-                elif "Moment 9" in mtype:
-                    if is_all_nan: data = np.full(self.current_m0_raw.shape, np.nan)
-                    else:
-                        safe_cube = np.copy(mc)
-                        safe_cube[np.isnan(safe_cube)] = -np.inf 
-                        pidx = np.argmax(safe_cube, axis=0)
-                        data = sub_v[pidx]
-                        m0 = np.nansum(mc, axis=0)
-                        data[m0 == 0] = np.nan
-                    levels = (minX, maxX)
-                    unit_str = "km/s"
-                    view.ui.histogram.axis.setLabel("Peak Velocity (km/s)")
-                    p['unit'] = unit_str
-                    
-            p['current_data'] = data
-            view.setImage(data, autoLevels=False, autoHistogramRange=False, levels=levels, scale=scale_tup, pos=pos_tup)
-            self.draw_contours(i, view, data)
+                elif 'Moment 9' in mtype:
+                    view.ui.histogram.axis.setLabel('Peak Velocity (km/s)')
+
+                p['current_data'] = data
+                p['unit']         = unit_str
+
+                if data is not None:
+                    view.setImage(
+                        data,
+                        autoLevels=False,
+                        autoHistogramRange=False,
+                        levels=levels,
+                        scale=scale_tup,
+                        pos=pos_tup,
+                    )
+                    self.draw_contours(panel_id, view, data)
 
     def clear_all_hover_labels(self):
         for lbl in [self.lbl_hover_ch, self.lbl_hover_spec, self.lbl_hover_pv] + [p['lbl_hover'] for p in self.panels]:

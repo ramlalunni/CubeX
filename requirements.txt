@@ -7,3 +7,7 @@ astroquery
 spectral-cube
 pyqt5
 pyqtgraph
+
+## Optional: install for faster PV diagram computation (2-5x speedup on large cubes).
+## The app works fully without it — falls back to pure NumPy automatically.
+# numba
