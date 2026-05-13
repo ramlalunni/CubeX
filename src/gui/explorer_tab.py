@@ -1667,15 +1667,18 @@ class ExplorerTab(QWidget):
                     self.plot_spatial_2.setLabel('left', f'Flux ({self.display_unit})')
                     self.plot_spatial_2.setLabel('bottom', 'Dec offset (arcsec)')
                     
+
             elif tool == "Line":
-                profile = roi.getArrayRegion(data, self.view_channel.getImageItem())
-                if profile is not None and len(profile) > 0:
-                    d_axis = np.arange(len(profile)) * self.pix_scale_arcsec
-                    self.curve_spatial_1.setData(d_axis, profile)
+                offsets, profile_2d = self.sample_cube_along_line(roi, data[np.newaxis, :, :])
+                if profile_2d is not None and profile_2d.size > 0:
+                    profile = profile_2d[:, 0]
+                    self.curve_spatial_1.setData(offsets, profile)
+                    self.curve_spatial_2.setData([], [])
                     self.plot_spatial_1.setLabel('left', f'Flux ({self.display_unit})')
                     self.plot_spatial_1.setLabel('bottom', 'Distance (arcsec)')
+                    self.lbl_spatial_stats.setText("Line profile plotted.")
                     
-            elif tool in ["Rectangle", "Circle"]:
+            elif tool in ["Rectangle", "Ellipse"]:
                 sub_data = roi.getArrayRegion(data, self.view_channel.getImageItem())
                 if sub_data is not None and sub_data.size > 0:
                     valid = sub_data[~np.isnan(sub_data)]
@@ -1702,8 +1705,12 @@ class ExplorerTab(QWidget):
                     else:
                         self.lbl_spatial_stats.setText("No valid data in region.")
 
+
         except Exception as e:
+            with open("line_debug.txt", "a") as dbg:
+                dbg.write(f"Exception: {e}\n")
             print(f"Error in update_spatial_analysis: {e}")
+
 
     def update_wcs_mode(self, is_absolute):
         self.is_absolute_wcs = is_absolute
