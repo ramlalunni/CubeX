@@ -294,6 +294,8 @@ class RegionPropertiesDialog(QDialog):
         coord_layout.addWidget(QLabel("Coordinate:"))
         self.rad_image = QRadioButton("Image")
         self.rad_world = QRadioButton("World")
+        self.rad_image.setStyleSheet("color: white;")
+        self.rad_world.setStyleSheet("color: white;")
         coord_layout.addWidget(self.rad_image)
         coord_layout.addWidget(self.rad_world)
         coord_layout.addStretch()

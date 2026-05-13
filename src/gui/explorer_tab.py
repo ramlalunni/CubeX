@@ -366,6 +366,24 @@ class MomentWorker(QThread):
 # INDIVIDUAL EXPLORER TAB
 # ==============================================================================
 
+def make_roi_rotatable_with_ctrl(roi):
+    original_move_point = roi.movePoint
+    def custom_move_point(handle, pos, modifiers=Qt.NoModifier, finish=True, coords='parent'):
+        h_dict = next((h for h in roi.handles if h['item'] == handle), None)
+        if h_dict:
+            if 'orig_center' not in h_dict:
+                h_dict['orig_center'] = h_dict['center']
+                
+            if modifiers & Qt.ControlModifier:
+                h_dict['type'] = 'r'
+                h_dict['center'] = pg.Point(0.5, 0.5)
+                handle.setCursor(Qt.ClosedHandCursor)
+            else:
+                h_dict['type'] = 's'
+                h_dict['center'] = h_dict['orig_center']
+                handle.setCursor(Qt.CrossCursor)
+        original_move_point(handle, pos, modifiers, finish, coords)
+    roi.movePoint = custom_move_point
 
 class ChannelMapViewBox(pg.ViewBox):
     def __init__(self, *args, **kwds):
@@ -396,6 +414,7 @@ class ChannelMapViewBox(pg.ViewBox):
                         self.current_roi.addScaleHandle([0.5, 1], [0.5, 0])
                         self.current_roi.addScaleHandle([0, 0.5], [1, 0.5])
                         self.current_roi.addScaleHandle([1, 0.5], [0, 0.5])
+                        make_roi_rotatable_with_ctrl(self.current_roi)
                     elif tool == "Ellipse":
                         self.current_roi = pg.EllipseROI([self.drag_start.x(), self.drag_start.y()], [1e-5, 1e-5], pen=pg.mkPen('c', width=2))
                         self.current_roi.addScaleHandle([0, 0], [1, 1])
@@ -406,6 +425,7 @@ class ChannelMapViewBox(pg.ViewBox):
                         self.current_roi.addScaleHandle([0.5, 1], [0.5, 0])
                         self.current_roi.addScaleHandle([0, 0.5], [1, 0.5])
                         self.current_roi.addScaleHandle([1, 0.5], [0, 0.5])
+                        make_roi_rotatable_with_ctrl(self.current_roi)
                     
                     if self.current_roi:
                         self.addItem(self.current_roi)
@@ -718,6 +738,7 @@ class ExplorerTab(QWidget):
         
         self.btn_edit_region = QPushButton("Edit region")
         self.btn_edit_region.setFixedHeight(22)
+        self.btn_edit_region.setStyleSheet("font-size: 11px; padding: 0px 4px;")
         self.btn_edit_region.hide()
         self.btn_edit_region.clicked.connect(self.open_edit_region_dialog)
         roi_layout.addWidget(self.btn_edit_region)
@@ -2079,6 +2100,7 @@ class ExplorerTab(QWidget):
             self.current_roi.addScaleHandle([0.5, 1], [0.5, 0])
             self.current_roi.addScaleHandle([0, 0.5], [1, 0.5])
             self.current_roi.addScaleHandle([1, 0.5], [0, 0.5])
+            make_roi_rotatable_with_ctrl(self.current_roi)
         elif roi_type == "Rectangle": 
             self.current_roi = pg.RectROI([cx, cy], [sz, sz], pen='#f1c40f')
             self.current_roi.addScaleHandle([0, 0], [1, 1])
@@ -2089,6 +2111,7 @@ class ExplorerTab(QWidget):
             self.current_roi.addScaleHandle([0.5, 1], [0.5, 0])
             self.current_roi.addScaleHandle([0, 0.5], [1, 0.5])
             self.current_roi.addScaleHandle([1, 0.5], [0, 0.5])
+            make_roi_rotatable_with_ctrl(self.current_roi)
         elif roi_type == "Custom Polygon": self.current_roi = pg.PolyLineROI([[cx, cy], [cx+sz, cy], [cx+sz/2, cy+sz]], closed=True, pen='#f1c40f')
         if self.current_roi is not None:
             self.view_channel.addItem(self.current_roi)
