@@ -9,7 +9,7 @@ import astropy.units as u
 from PyQt5.QtCore import QTimer, Qt, QThread, pyqtSignal
 from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
                              QPushButton, QFileDialog, QMessageBox, QLineEdit, 
-                             QComboBox, QFrame, QStackedWidget, QSizePolicy)
+                             QComboBox, QFrame, QStackedWidget, QSizePolicy, QTabWidget)
 from spectral_cube import SpectralCube
 
 # Optional Numba acceleration (graceful fallback to NumPy when not installed)
@@ -883,7 +883,25 @@ class ExplorerTab(QWidget):
             line.setPen(pg.mkPen(color='#3498db', width=3))
             line.setHoverPen(pg.mkPen(color='#f1c40f', width=5))
         self.plot_widget.addItem(self.region)
-        spectrum_layout.addWidget(self.plot_widget)
+        
+        self.spectrum_tabs = QTabWidget()
+        self.spectrum_tabs.addTab(self.plot_widget, "Original")
+        self.spectrum_tabs.tabBar().hide()
+        spectrum_layout.addWidget(self.spectrum_tabs)
+        
+        self.spectrum_viewbox_smooth = SpectrumViewBox()
+        self.spectrum_viewbox_smooth.parent_tab = self
+        self.plot_widget_smooth = pg.PlotWidget(viewBox=self.spectrum_viewbox_smooth)
+        self.plot_widget_smooth.showGrid(x=True, y=True, alpha=0.3)
+        fix_axis_scaling(self.plot_widget_smooth.getAxis('left'))
+        self.plot_widget_smooth.setLabel('bottom', 'Radio Velocity (km/s)')
+        self.plot_widget_smooth.setLabel('left', 'Flux')
+        
+        self.spectrum_curve_smooth = pg.PlotDataItem([], [], stepMode="center", fillLevel=0, brush=(255, 255, 255, 80), pen=pg.mkPen('c', width=2))
+        self.plot_widget_smooth.addItem(self.spectrum_curve_smooth)
+        
+        self.smoothing_params = None
+        self.spectrum_tabs.currentChanged.connect(self._on_spectrum_tab_changed)
         
         self.lbl_hover_spec = QLabel("")
         self.lbl_hover_spec.setStyleSheet("color: #aaa; font-size: 9.5px;")
@@ -896,6 +914,15 @@ class ExplorerTab(QWidget):
         self.combo_spec_stat.currentTextChanged.connect(self.update_spectrum)
         self.combo_spec_stat.currentTextChanged.connect(lambda: self.lbl_region_result.setText("---"))
         input_layout.addWidget(self.combo_spec_stat)
+        
+        self.btn_smooth = QPushButton("Smooth")
+        self.btn_smooth.clicked.connect(self.open_smoothing_dialog)
+        input_layout.addWidget(self.btn_smooth)
+        
+        self.btn_remove_smooth = QPushButton("Remove Smoothed")
+        self.btn_remove_smooth.clicked.connect(self.remove_smoothed_spectrum)
+        self.btn_remove_smooth.hide()
+        input_layout.addWidget(self.btn_remove_smooth)
         
         input_layout.addStretch()
         input_layout.addWidget(QLabel("Min Vel:"))
@@ -1103,9 +1130,11 @@ class ExplorerTab(QWidget):
 
         self.plot_channel.scene().sigMouseMoved.connect(lambda pos: self.hover_event(pos, self.plot_channel, self.get_current_channel_data(), self.lbl_hover_ch, 'channel'))
         self.plot_widget.scene().sigMouseMoved.connect(self.hover_spectrum)
+        self.plot_widget_smooth.scene().sigMouseMoved.connect(self.hover_spectrum)
         self.pv_plot_item.scene().sigMouseMoved.connect(self.hover_pv)
         
         self.plot_widget.scene().sigMouseClicked.connect(lambda event: self.universal_click_handler(event, self.plot_widget))
+        self.plot_widget_smooth.scene().sigMouseClicked.connect(lambda event: self.universal_click_handler(event, self.plot_widget_smooth))
         self.plot_channel.scene().sigMouseClicked.connect(lambda event: self.universal_click_handler(event, self.plot_channel))
         self.pv_plot_item.scene().sigMouseClicked.connect(lambda _event: self.set_active_panel('spectrum'))
         for p in self.panels:
@@ -1126,6 +1155,60 @@ class ExplorerTab(QWidget):
             self.lbl_spatial_tool.show()
             self.combo_spatial_tool.show()
             self.change_spatial_tool(self.combo_spatial_tool.currentText())
+
+    def open_smoothing_dialog(self):
+        from src.gui.dialogs import SpectralSmoothingDialog
+        dialog = SpectralSmoothingDialog(self)
+        if dialog.exec_():
+            params = dialog.get_params()
+            if params:
+                self.smoothing_params = params
+                if self.spectrum_tabs.indexOf(self.plot_widget_smooth) == -1:
+                    self.spectrum_tabs.addTab(self.plot_widget_smooth, "Smoothed")
+                self.spectrum_tabs.tabBar().show()
+                self.spectrum_tabs.setCurrentWidget(self.plot_widget_smooth)
+                self.btn_remove_smooth.show()
+                self.update_spectrum()
+
+    def remove_smoothed_spectrum(self):
+        self.smoothing_params = None
+        idx = self.spectrum_tabs.indexOf(self.plot_widget_smooth)
+        if idx != -1:
+            self.spectrum_tabs.removeTab(idx)
+        self.spectrum_tabs.tabBar().hide()
+        self.spectrum_tabs.setCurrentWidget(self.plot_widget)
+        self.btn_remove_smooth.hide()
+        self._on_spectrum_tab_changed()
+        self.update_spectrum()
+
+    def get_active_spectrum_plot(self):
+        if getattr(self, 'spectrum_tabs', None) is not None and getattr(self, 'plot_widget_smooth', None) is not None:
+            if self.spectrum_tabs.currentWidget() == self.plot_widget_smooth:
+                return self.plot_widget_smooth
+        return getattr(self, 'plot_widget', None)
+
+    def get_active_spectrum_rois(self):
+        if getattr(self, 'spectrum_tabs', None) is not None and getattr(self, 'plot_widget_smooth', None) is not None:
+            if self.spectrum_tabs.currentWidget() == self.plot_widget_smooth:
+                if not hasattr(self, 'spectrum_rois_smooth'):
+                    self.spectrum_rois_smooth = []
+                return self.spectrum_rois_smooth
+        if not hasattr(self, 'spectrum_rois'):
+            self.spectrum_rois = []
+        return self.spectrum_rois
+
+    def _on_spectrum_tab_changed(self):
+        current_widget = self.spectrum_tabs.currentWidget()
+        if not current_widget: return
+        
+        if current_widget == getattr(self, 'plot_widget_smooth', None):
+            self.btn_remove_smooth.show()
+        else:
+            self.btn_remove_smooth.hide()
+            
+        self.update_region_ui_visibility()
+        self.rename_regions()
+        self.update_spectrum_region_calc()
 
     def any_pv_panels_active(self):
         return any(panel['combo'].currentText() == "PV Diagram" for panel in self.panels)
@@ -2178,6 +2261,29 @@ class ExplorerTab(QWidget):
         else: ve = np.array([vs[0]-1, vs[0]+1])
         self.spectrum_curve.setData(x=ve, y=ss)
         
+        if getattr(self, 'smoothing_params', None) is not None and getattr(self, 'spectrum_tabs', None) is not None:
+            if self.spectrum_tabs.indexOf(self.plot_widget_smooth) != -1:
+                method = self.smoothing_params['method']
+                ss_smooth = ss.copy()
+                try:
+                    if method == 'boxcar':
+                        from scipy.ndimage import uniform_filter1d
+                        w = self.smoothing_params['window']
+                        ss_smooth = uniform_filter1d(ss_smooth, size=w)
+                    elif method == 'gaussian':
+                        from scipy.ndimage import gaussian_filter1d
+                        sigma = self.smoothing_params['sigma']
+                        ss_smooth = gaussian_filter1d(ss_smooth, sigma=sigma)
+                    elif method == 'savgol':
+                        from scipy.signal import savgol_filter
+                        w = self.smoothing_params['window']
+                        p = self.smoothing_params['polyorder']
+                        if len(ss_smooth) > w:
+                            ss_smooth = savgol_filter(ss_smooth, window_length=w, polyorder=p)
+                except Exception:
+                    pass
+                self.spectrum_curve_smooth.setData(x=ve, y=ss_smooth)
+        
         if self.catalog_overlay_items:
             ymax = np.nanmax(ss) if ss is not None else 1.0
             for item in self.catalog_overlay_items:
@@ -2454,7 +2560,8 @@ class ExplorerTab(QWidget):
             self.lbl_hover_pv.setStyleSheet("color: #3498db; font-weight: bold; font-size: 9.5px;")
 
     def update_region_ui_visibility(self):
-        n = len(self.spectrum_rois)
+        active_rois = self.get_active_spectrum_rois()
+        n = len(active_rois)
         
         self.lbl_regions.setVisible(n >= 1)
         self.combo_regions.setVisible(n >= 1)
@@ -2481,7 +2588,8 @@ class ExplorerTab(QWidget):
         self.combo_regions_2.addItem("None")
         self.combo_regions_3.addItem("None")
         
-        for i, item in enumerate(self.spectrum_rois):
+        active_rois = self.get_active_spectrum_rois()
+        for i, item in enumerate(active_rois):
             new_name = f"Region {i + 1}"
             item["name"] = new_name
             item["text_item"].setText(new_name)
@@ -2503,16 +2611,17 @@ class ExplorerTab(QWidget):
         if roi.scene():
             roi.scene().removeItem(roi)
         else:
-            self.plot_widget.removeItem(roi)
+            self.get_active_spectrum_plot().removeItem(roi)
             
-        for i, item in enumerate(self.spectrum_rois):
+        active_rois = self.get_active_spectrum_rois()
+        for i, item in enumerate(active_rois):
             if item["roi"] == roi:
                 ti = item["text_item"]
                 if ti.scene():
                     ti.scene().removeItem(ti)
                 else:
-                    self.plot_widget.removeItem(ti)
-                self.spectrum_rois.pop(i)
+                    self.get_active_spectrum_plot().removeItem(ti)
+                active_rois.pop(i)
                 break
 
     def delete_selected_regions(self):
@@ -2523,7 +2632,8 @@ class ExplorerTab(QWidget):
         self.rename_regions()
 
     def clear_spectrum_regions(self):
-        for item in list(self.spectrum_rois):
+        active_rois = self.get_active_spectrum_rois()
+        for item in list(active_rois):
             self.delete_region(item["roi"])
         self.rois_to_delete.clear()
         self.update_region_ui_visibility()
@@ -2537,14 +2647,15 @@ class ExplorerTab(QWidget):
         self.on_region_selected()
 
     def add_spectrum_region(self, roi):
-        region_name = f"Region {len(self.spectrum_rois) + 1}"
+        active_rois = self.get_active_spectrum_rois()
+        region_name = f"Region {len(active_rois) + 1}"
         roi_info = {"name": region_name, "roi": roi}
-        self.spectrum_rois.append(roi_info)
+        active_rois.append(roi_info)
         
         self.update_region_ui_visibility()
         
         text_item = pg.TextItem(text=region_name, color=(200, 200, 200, 150), anchor=(1, 1))
-        self.plot_widget.addItem(text_item)
+        self.get_active_spectrum_plot().addItem(text_item)
         
         def update_text_pos(r=roi, t=text_item):
             try:
@@ -2578,7 +2689,8 @@ class ExplorerTab(QWidget):
             self.combo_regions_3.currentText()
         ]
         
-        for item in self.spectrum_rois:
+        active_rois = self.get_active_spectrum_rois()
+        for item in active_rois:
             roi = item["roi"]
             if roi in getattr(self, 'rois_to_delete', []):
                 roi.setPen(pg.mkPen('r', width=3))
@@ -2589,7 +2701,12 @@ class ExplorerTab(QWidget):
         self.update_spectrum_region_calc()
 
     def update_spectrum_region_calc(self, _=None):
-        if not self.spectrum_rois or self.spectrum_curve.yData is None:
+        active_rois = self.get_active_spectrum_rois()
+        active_curve = self.spectrum_curve
+        if self.get_active_spectrum_plot() == getattr(self, 'plot_widget_smooth', None):
+            active_curve = getattr(self, 'spectrum_curve_smooth', self.spectrum_curve)
+
+        if not active_rois or active_curve.yData is None:
             self.lbl_region_result.setText("---")
             return
             
@@ -2599,14 +2716,14 @@ class ExplorerTab(QWidget):
             self.combo_regions_3.currentText()
         ]
         
-        selected_rois = [item["roi"] for item in self.spectrum_rois if item["name"] in selected_names and item["name"] != "None"]
+        selected_rois = [item["roi"] for item in active_rois if item["name"] in selected_names and item["name"] != "None"]
                 
         if not selected_rois:
             self.lbl_region_result.setText("---")
             return
-            
-        v_axis = self.spectrum_curve.xData
-        flux = self.spectrum_curve.yData
+
+        v_axis = active_curve.xData
+        flux = active_curve.yData
         
         if v_axis is not None and len(v_axis) == len(flux) + 1:
             v_axis = (v_axis[:-1] + v_axis[1:]) / 2.0

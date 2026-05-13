@@ -252,6 +252,12 @@ class KinematicExplorerApp(QMainWindow):
             self.tabs.setTabText(self.tabs.currentIndex(), "Untitled")
             self.statusBar().showMessage("Cube closed.")
 
+    def _get_active_spectrum_curve(self, tab):
+        if getattr(tab, 'spectrum_tabs', None) is not None and getattr(tab, 'plot_widget_smooth', None) is not None:
+            if tab.spectrum_tabs.currentWidget() == tab.plot_widget_smooth:
+                return getattr(tab, 'spectrum_curve_smooth', tab.spectrum_curve)
+        return tab.spectrum_curve
+
     def export_spectrum(self):
         tab = self.get_active_tab()
         if tab and tab.cube_clean is not None:
@@ -261,7 +267,8 @@ class KinematicExplorerApp(QMainWindow):
                 try:
                     sort_idx = np.argsort(tab.v_axis)
                     v_sorted = tab.v_axis[sort_idx]
-                    spec_sorted = tab.spectrum_curve.yData 
+                    active_curve = self._get_active_spectrum_curve(tab)
+                    spec_sorted = active_curve.yData 
                     with open(file_name, mode='w', newline='') as file:
                         writer = csv.writer(file)
                         writer.writerow(["Velocity (km/s)", f"Flux ({tab.spec_unit})"])
@@ -282,7 +289,8 @@ class KinematicExplorerApp(QMainWindow):
             try:
                 sort_idx = np.argsort(tab.v_axis)
                 v_sorted = tab.v_axis[sort_idx]
-                spec_sorted = tab.spectrum_curve.yData 
+                active_curve = self._get_active_spectrum_curve(tab)
+                spec_sorted = active_curve.yData 
                 
                 dv = v_sorted[1] - v_sorted[0] if len(v_sorted) > 1 else 1.0
                 
@@ -312,7 +320,8 @@ class KinematicExplorerApp(QMainWindow):
             try:
                 sort_idx = np.argsort(tab.v_axis)
                 v_sorted = tab.v_axis[sort_idx]
-                spec_sorted = tab.spectrum_curve.yData 
+                active_curve = self._get_active_spectrum_curve(tab)
+                spec_sorted = active_curve.yData 
                 
                 # Standard Matplotlib PDF Export
                 fig, ax = plt.subplots(figsize=(10, 5))
