@@ -1854,6 +1854,32 @@ class ExplorerTab(QWidget):
                     self.set_active_panel(i)
                     break
 
+        if source_plot == self.plot_channel and getattr(self, 'is_drawing_polygon', False):
+            if event.button() == Qt.LeftButton:
+                mp = source_plot.vb.mapSceneToView(event.scenePos())
+                
+                # Check for closing condition: double click OR clicking near first point
+                is_closing = False
+                if len(self.polygon_points) >= 3:
+                    p0 = self.polygon_points[0]
+                    dist = np.sqrt((mp.x() - p0[0])**2 + (mp.y() - p0[1])**2)
+                    # Tolerance: 3% of view width
+                    view_range = source_plot.vb.viewRect()
+                    tol = view_range.width() * 0.03
+                    if event.double() or dist < tol:
+                        is_closing = True
+                
+                if is_closing:
+                    self.finalize_polygon()
+                else:
+                    self.polygon_points.append([mp.x(), mp.y()])
+                    # Update preview
+                    pts = np.array(self.polygon_points)
+                    self.polygon_preview_line.setData(pts[:,0], pts[:,1], symbol='o', symbolSize=5)
+            elif event.button() == Qt.RightButton:
+                self.cancel_polygon()
+            return
+
         if source_plot == self.plot_widget:
             if event.button() == Qt.LeftButton and event.modifiers() == Qt.NoModifier:
                 mp = self.plot_widget.plotItem.vb.mapSceneToView(event.scenePos())
@@ -1914,7 +1940,7 @@ class ExplorerTab(QWidget):
                     self.combo_roi.setCurrentText(roi_type)
                     self.combo_roi.blockSignals(False)
                     
-                    if roi_type in ["Ellipse", "Rectangle", "Point (Beam)"]:
+                    if roi_type in ["Ellipse", "Rectangle", "Point (Beam)", "Custom Polygon"]:
                         self.btn_edit_region.show()
                     else:
                         self.btn_edit_region.hide()
@@ -2234,7 +2260,7 @@ class ExplorerTab(QWidget):
         cx, cy = offset, offset
         
         if hasattr(self, 'btn_edit_region'):
-            if roi_type in ["Ellipse", "Rectangle", "Point (Beam)"]:
+            if roi_type in ["Ellipse", "Rectangle", "Point (Beam)", "Custom Polygon"]:
                 self.btn_edit_region.show()
             else:
                 self.btn_edit_region.hide()
@@ -2264,51 +2290,81 @@ class ExplorerTab(QWidget):
             new_roi.addScaleHandle([1, 0.5], [0, 0.5])
             make_roi_rotatable_with_ctrl(new_roi)
         elif roi_type == "Custom Polygon": 
-            new_roi = pg.PolyLineROI([[cx, cy], [cx+sz, cy], [cx+sz/2, cy+sz]], closed=True, pen='#f1c40f')
-            def custom_shape(roi=new_roi):
-                p = QPainterPath()
-                if not roi.handles: return p
-                p.moveTo(roi.handles[0]['item'].pos())
-                for h in roi.handles[1:]:
-                    p.lineTo(h['item'].pos())
-                p.closeSubpath()
-                return p
-            new_roi.shape = custom_shape
+            # Interactive drawing mode
+            self.is_drawing_polygon = True
+            self.polygon_points = []
+            if self.polygon_preview_line is not None:
+                self.plot_channel.vb.removeItem(self.polygon_preview_line)
+            self.polygon_preview_line = pg.PlotDataItem([], [], pen=pg.mkPen('y', width=2, style=Qt.DashLine))
+            self.plot_channel.vb.addItem(self.polygon_preview_line)
+            # Notify the user via status bar if available, or just start
+            return # Don't add ROI yet
         
         if new_roi is not None:
-            col = self.region_colors[len(self.spectrum_spatial_rois) % len(self.region_colors)]
-            new_roi.setPen(pg.mkPen(col, width=3))
-            self.view_channel.addItem(new_roi)
-            new_roi.sigRegionChanged.connect(self.update_spectrum)
+            self._finish_roi_addition(new_roi, roi_type)
+
+    def finalize_polygon(self):
+        if len(self.polygon_points) < 3:
+            self.cancel_polygon()
+            return
             
-            # Uncheck existing
-            for r_dict in self.spectrum_spatial_rois:
-                r_dict["checkbox"].blockSignals(True)
-                r_dict["checkbox"].setChecked(False)
-                r_dict["checkbox"].blockSignals(False)
-                r_dict["roi"].setPen(pg.mkPen(r_dict["color"], width=2))
-                
-            name = f"Region {len(self.spectrum_spatial_rois) + 1}"
-            cb = QCheckBox(name)
-            cb.setChecked(True)
-            cb.setStyleSheet(f"color: {col}; font-weight: bold;")
-            cb.toggled.connect(self.update_spectrum)
-            self.box_regions_layout.addWidget(cb)
+        pts = self.polygon_points
+        self.cancel_polygon()
+        
+        new_roi = pg.PolyLineROI(pts, closed=True, pen='#f1c40f')
+        def custom_shape(roi=new_roi):
+            p = QPainterPath()
+            if not roi.handles: return p
+            p.moveTo(roi.handles[0]['item'].pos())
+            for h in roi.handles[1:]:
+                p.lineTo(h['item'].pos())
+            p.closeSubpath()
+            return p
+        new_roi.shape = custom_shape
+        
+        self._finish_roi_addition(new_roi, "Custom Polygon")
+        self.update_spectrum()
+
+    def cancel_polygon(self):
+        self.is_drawing_polygon = False
+        self.polygon_points = []
+        if self.polygon_preview_line:
+            self.plot_channel.vb.removeItem(self.polygon_preview_line)
+            self.polygon_preview_line = None
+
+    def _finish_roi_addition(self, new_roi, roi_type):
+        col = self.region_colors[len(self.spectrum_spatial_rois) % len(self.region_colors)]
+        new_roi.setPen(pg.mkPen(col, width=3))
+        self.view_channel.addItem(new_roi)
+        new_roi.sigRegionChanged.connect(self.update_spectrum)
+        
+        # Uncheck existing
+        for r_dict in self.spectrum_spatial_rois:
+            r_dict["checkbox"].blockSignals(True)
+            r_dict["checkbox"].setChecked(False)
+            r_dict["checkbox"].blockSignals(False)
+            r_dict["roi"].setPen(pg.mkPen(r_dict["color"], width=2))
             
-            self.spectrum_spatial_rois.append({
-                "name": name,
-                "roi": new_roi,
-                "checkbox": cb,
-                "color": col,
-                "type": roi_type
-            })
-            self.roi_selected = True
-            self.active_spatial_spectrum_roi = new_roi
-            
-            if len(self.spectrum_spatial_rois) > 1:
-                self.box_regions.show()
-            self.refresh_spectral_stats_apertures()
-                
+        name = f"Region {len(self.spectrum_spatial_rois) + 1}"
+        cb = QCheckBox(name)
+        cb.setChecked(True)
+        cb.setStyleSheet(f"color: {col}; font-weight: bold;")
+        cb.toggled.connect(self.update_spectrum)
+        self.box_regions_layout.addWidget(cb)
+        
+        self.spectrum_spatial_rois.append({
+            "name": name,
+            "roi": new_roi,
+            "checkbox": cb,
+            "color": col,
+            "type": roi_type
+        })
+        self.roi_selected = True
+        self.active_spatial_spectrum_roi = new_roi
+        
+        if len(self.spectrum_spatial_rois) > 1:
+            self.box_regions.show()
+        self.refresh_spectral_stats_apertures()
         self.update_spectrum()
         
     def remove_spatial_spectrum_roi(self, roi):
@@ -2730,6 +2786,14 @@ class ExplorerTab(QWidget):
     def hover_event(self, pos, plot_item, data_array, active_label, panel_id='channel'):
         self.clear_all_hover_labels()
         if data_array is None or self.cube_clean is None: return
+
+        if getattr(self, 'is_drawing_polygon', False) and panel_id == 'channel':
+            if self.polygon_points and self.polygon_preview_line:
+                mp = plot_item.vb.mapSceneToView(pos)
+                pts = list(self.polygon_points)
+                pts.append([mp.x(), mp.y()])
+                arr = np.array(pts)
+                self.polygon_preview_line.setData(arr[:,0], arr[:,1], symbol='o', symbolSize=5)
         if plot_item.sceneBoundingRect().contains(pos):
             mp = plot_item.vb.mapSceneToView(pos)
             

@@ -277,6 +277,7 @@ class RegionPropertiesDialog(QDialog):
         self.roi_dict = roi_dict
         self.tab = explorer_tab
         self.is_ellipse = isinstance(roi, pg.EllipseROI)
+        self.is_polyline = isinstance(roi, pg.PolyLineROI) and not self.is_ellipse
         self.setWindowTitle("Region Properties")
         self.setMinimumWidth(400)
         
@@ -298,6 +299,11 @@ class RegionPropertiesDialog(QDialog):
             name_layout.addWidget(self.edit_name)
             layout.addLayout(name_layout)
             self.edit_name.editingFinished.connect(self.apply_name)
+            
+        if self.is_polyline:
+            layout.addStretch()
+            self._updating = False
+            return
             
         # Coordinate selection
         coord_layout = QHBoxLayout()
@@ -404,6 +410,7 @@ class RegionPropertiesDialog(QDialog):
         if self._updating: return
         self._updating = True
         try:
+            if self.is_polyline: return
             pos = self.roi.pos()
             size = self.roi.size()
             angle = self.roi.angle()
