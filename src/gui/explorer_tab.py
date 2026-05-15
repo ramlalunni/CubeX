@@ -510,8 +510,9 @@ class ChannelMapViewBox(pg.ViewBox):
                     return
                 
                 if tool == "Point":
-                    sz = self.parent_tab.pix_scale_arcsec * 1.5 if hasattr(self.parent_tab, 'pix_scale_arcsec') else 1.5
-                    roi = pg.CircleROI([pos.x()-sz/2, pos.y()-sz/2], [sz, sz], pen=pg.mkPen('c', width=2))
+                    # Use a small ROI for point since PointROI doesn't exist
+                    sz = self.parent_tab.pix_scale_arcsec * 0.1 if hasattr(self.parent_tab, 'pix_scale_arcsec') else 0.1
+                    roi = pg.ROI([pos.x() - sz/2, pos.y() - sz/2], [sz, sz], pen=pg.mkPen('c', width=2))
                     self.addItem(roi)
                     self.parent_tab.add_spatial_region(roi, "Point")
                     ev.accept()
@@ -761,7 +762,7 @@ class ExplorerTab(QWidget):
         roi_layout.addWidget(self.lbl_spatial_tool)
         self.combo_spatial_tool = QComboBox()
         self.combo_spatial_tool.setFixedHeight(22)
-        self.combo_spatial_tool.addItems(["Point", "Line", "Rectangle", "Ellipse"])
+        self.combo_spatial_tool.addItems(["None", "Point", "Line", "Rectangle", "Ellipse"])
         self.combo_spatial_tool.currentTextChanged.connect(self.change_spatial_tool)
         roi_layout.addWidget(self.combo_spatial_tool)
         
@@ -1159,6 +1160,17 @@ class ExplorerTab(QWidget):
             self.combo_spatial_tool.show()
             self.change_spatial_tool(self.combo_spatial_tool.currentText())
 
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key_Escape:
+            # Delete Spatial Analysis region
+            if getattr(self, 'spatial_rois_to_delete', []):
+                self.delete_selected_spatial_regions()
+            # Delete Spectrum region (if highlighted)
+            if getattr(self, 'active_spatial_spectrum_roi', None):
+                self.remove_spatial_spectrum_roi(self.active_spatial_spectrum_roi)
+                self.active_spatial_spectrum_roi = None
+        super().keyPressEvent(event)
+
     def open_smoothing_dialog(self):
         # Mutual exclusion: warn if Edit Region dialog is open
         if getattr(self, '_region_dialog', None) and self._region_dialog.isVisible():
@@ -1431,6 +1443,14 @@ class ExplorerTab(QWidget):
             panel['lbl_hover'].setStyleSheet("color: #3498db; font-weight: bold; font-size: 9.5px;")
 
     def change_spatial_tool(self, tool):
+        if self.cube_clean is None: return
+        
+        if tool == "None":
+            self.plot_spatial_1.hide()
+            self.plot_spatial_2.hide()
+            self.lbl_spatial_stats.setText("Choose a tool to begin analysis.")
+            return
+
         if tool == "Point":
             self.plot_spatial_1.show()
             self.plot_spatial_1.setTitle("X Profile")
@@ -1445,6 +1465,37 @@ class ExplorerTab(QWidget):
             self.plot_spatial_1.hide()
             self.plot_spatial_2.hide()
             self.lbl_spatial_stats.show()
+
+        # Auto-draw default shape
+        sz = self.nx * self.pix_scale_arcsec * 0.15
+        num = len(self.spatial_rois)
+        cx, cy = num * sz * 0.1, num * sz * 0.1
+        
+        new_roi = None
+        if tool == "Point":
+            sz_pt = self.pix_scale_arcsec * 0.1
+            new_roi = pg.ROI([cx - sz_pt/2, cy - sz_pt/2], [sz_pt, sz_pt], pen='c')
+        elif tool == "Line":
+            new_roi = pg.LineSegmentROI([[cx, cy], [cx + sz, cy + sz]], pen='c')
+        elif tool == "Rectangle":
+            new_roi = pg.RectROI([cx, cy], [sz, sz], pen='c')
+            new_roi.addScaleHandle([0, 0], [1, 1]); new_roi.addScaleHandle([1, 1], [0, 0])
+            new_roi.addScaleHandle([0, 1], [1, 0]); new_roi.addScaleHandle([1, 0], [0, 1])
+            new_roi.addScaleHandle([0.5, 0], [0.5, 1]); new_roi.addScaleHandle([0.5, 1], [0.5, 0])
+            new_roi.addScaleHandle([0, 0.5], [1, 0.5]); new_roi.addScaleHandle([1, 0.5], [0, 0.5])
+            make_roi_rotatable_with_ctrl(new_roi)
+        elif tool == "Ellipse":
+            new_roi = pg.EllipseROI([cx, cy], [sz, sz], pen='c')
+            new_roi.addScaleHandle([0, 0], [1, 1]); new_roi.addScaleHandle([1, 1], [0, 0])
+            new_roi.addScaleHandle([0, 1], [1, 0]); new_roi.addScaleHandle([1, 0], [0, 1])
+            new_roi.addScaleHandle([0.5, 0], [0.5, 1]); new_roi.addScaleHandle([0.5, 1], [0.5, 0])
+            new_roi.addScaleHandle([0, 0.5], [1, 0.5]); new_roi.addScaleHandle([1, 0.5], [0, 0.5])
+            make_roi_rotatable_with_ctrl(new_roi)
+
+        if new_roi:
+            self.view_channel.addItem(new_roi)
+            self.add_spatial_region(new_roi, tool)
+            self.select_spatial_region(new_roi)
 
     def add_spatial_region(self, roi, tool):
         name = f"{tool} {len(self.spatial_rois) + 1}"
@@ -1461,6 +1512,7 @@ class ExplorerTab(QWidget):
             if item["roi"] != roi:
                 item["roi"].setPen(pg.mkPen('c', width=2))
         roi.setPen(pg.mkPen('y', width=3))
+        self.spatial_rois_to_delete = [roi]
         
         self.update_spatial_analysis()
 
@@ -1484,24 +1536,31 @@ class ExplorerTab(QWidget):
         return False
 
     def on_spatial_region_selected(self, name):
-        self.spatial_rois_to_delete.clear()
         for item in self.spatial_rois:
             if item["name"] == name:
-                self.spatial_rois_to_delete.append(item["roi"])
-                item["roi"].setPen(pg.mkPen('r', width=3))
-            else:
-                item["roi"].setPen(pg.mkPen('c', width=2))
-        self.update_spatial_analysis()
+                self.select_spatial_region(item["roi"])
+                break
 
     def delete_selected_spatial_via_button(self):
         self.delete_selected_spatial_regions()
 
     def select_spatial_region(self, roi):
-        # We can still keep the ctrl+click logic working and update the combo box
+        self.spatial_rois_to_delete = [roi]
         for item in self.spatial_rois:
             if item["roi"] == roi:
+                item["roi"].setPen(pg.mkPen('y', width=3))
+                self.combo_spatial_regions.blockSignals(True)
                 self.combo_spatial_regions.setCurrentText(item["name"])
-                return
+                self.combo_spatial_regions.blockSignals(False)
+                
+                # Show edit button
+                if item["tool"] in ["Ellipse", "Rectangle", "Point", "Line"]:
+                    self.btn_edit_region.show()
+                else:
+                    self.btn_edit_region.hide()
+            else:
+                item["roi"].setPen(pg.mkPen('c', width=2))
+        self.update_spatial_analysis()
 
     def delete_selected_spatial_regions(self):
         for roi in list(self.spatial_rois_to_delete):
@@ -1843,6 +1902,14 @@ class ExplorerTab(QWidget):
 
     def universal_click_handler(self, event, source_plot):
         if self.cube_clean is None: return
+        
+        try:
+            mp = source_plot.vb.mapSceneToView(event.scenePos())
+        except Exception:
+            if hasattr(source_plot, 'plotItem'):
+                mp = source_plot.plotItem.vb.mapSceneToView(event.scenePos())
+            else:
+                return
 
         if source_plot == self.plot_channel:
             self.set_active_panel('channel')
@@ -1882,7 +1949,6 @@ class ExplorerTab(QWidget):
 
         if source_plot == self.plot_widget:
             if event.button() == Qt.LeftButton and event.modifiers() == Qt.NoModifier:
-                mp = self.plot_widget.plotItem.vb.mapSceneToView(event.scenePos())
                 idx = (np.abs(self.v_axis - mp.x())).argmin()
                 self.slider_channel.setValue(idx)
             return
@@ -1891,7 +1957,6 @@ class ExplorerTab(QWidget):
             if event.button() == Qt.LeftButton:
                 pos = event.scenePos()
                 if source_plot.sceneBoundingRect().contains(pos):
-                    mp = source_plot.vb.mapSceneToView(pos)
                     start_x = (self.nx / 2) * self.pix_scale_arcsec
                     start_y = -(self.ny / 2) * self.pix_scale_arcsec
                     x_idx = int((mp.x() - start_x) / (-self.pix_scale_arcsec))
@@ -1907,50 +1972,81 @@ class ExplorerTab(QWidget):
                             self.update_moment_maps()
             return 
             
-        if source_plot == self.plot_channel and self.spectrum_spatial_rois:
-            mp = self.plot_channel.vb.mapSceneToView(event.scenePos())
+        if source_plot == self.plot_channel:
             hit = False
-            for r_dict in self.spectrum_spatial_rois:
-                roi = r_dict["roi"]
-                if isinstance(roi, pg.PolyLineROI):
-                    path = QPainterPath()
-                    pts = [roi.mapToParent(h.pos()) for h in roi.getHandles()]
-                    if pts:
-                        path.moveTo(pts[0])
-                        for p in pts[1:]:
-                            path.lineTo(p)
-                        path.closeSubpath()
-                    is_clicked = path.contains(mp)
-                else:
-                    r_pos = roi.pos()
-                    r_size = roi.size()
-                    min_x = min(r_pos.x(), r_pos.x() + r_size.x())
-                    max_x = max(r_pos.x(), r_pos.x() + r_size.x())
-                    min_y = min(r_pos.y(), r_pos.y() + r_size.y())
-                    max_y = max(r_pos.y(), r_pos.y() + r_size.y())
-                    is_clicked = (min_x <= mp.x() <= max_x) and (min_y <= mp.y() <= max_y)
-                if is_clicked:
-                    hit = True
-                    roi.setPen(pg.mkPen('y', width=3))
-                    self.active_spatial_spectrum_roi = roi
-                    
-                    # Sync UI tools with selected ROI type
-                    roi_type = r_dict.get("type", "Ellipse")
-                    self.combo_roi.blockSignals(True)
-                    self.combo_roi.setCurrentText(roi_type)
-                    self.combo_roi.blockSignals(False)
-                    
-                    if roi_type in ["Ellipse", "Rectangle", "Point (Beam)", "Custom Polygon"]:
-                        self.btn_edit_region.show()
+            mode = self.combo_panel_mode.currentText()
+            
+            # Priority: check Spatial Analysis ROIs if in that mode
+            if mode == "Spatial Analysis" and self.spatial_rois:
+                for item in self.spatial_rois:
+                    roi = item["roi"]
+                    is_clicked = False
+                    if hasattr(roi, 'shape'):
+                         is_clicked = roi.shape().contains(roi.mapFromScene(event.scenePos()))
+                    elif isinstance(roi, pg.LineSegmentROI):
+                         is_clicked = self.line_roi_hit_test(roi, event.scenePos())
+                    elif isinstance(roi, pg.ROI):
+                         # For Points (small ROI) and others
+                         r_pos = roi.pos()
+                         r_size = roi.size()
+                         # Buffer for points to make them clickable
+                         buf = 0.5 * self.pix_scale_arcsec if r_size.x() < self.pix_scale_arcsec else 0
+                         min_x = min(r_pos.x(), r_pos.x() + r_size.x()) - buf
+                         max_x = max(r_pos.x(), r_pos.x() + r_size.x()) + buf
+                         min_y = min(r_pos.y(), r_pos.y() + r_size.y()) - buf
+                         max_y = max(r_pos.y(), r_pos.y() + r_size.y()) + buf
+                         is_clicked = (min_x <= mp.x() <= max_x) and (min_y <= mp.y() <= max_y)
+
+                    if is_clicked:
+                        hit = True
+                        self.select_spatial_region(roi)
+                        break
+
+            # Then check Spectrum ROIs
+            if not hit and self.spectrum_spatial_rois:
+                for r_dict in self.spectrum_spatial_rois:
+                    roi = r_dict["roi"]
+                    is_clicked = False
+                    if isinstance(roi, pg.PolyLineROI):
+                        path = QPainterPath()
+                        pts = [roi.mapToParent(h.pos()) for h in roi.getHandles()]
+                        if pts:
+                            path.moveTo(pts[0])
+                            for p in pts[1:]:
+                                path.lineTo(p)
+                            path.closeSubpath()
+                        is_clicked = path.contains(mp)
                     else:
-                        self.btn_edit_region.hide()
-                else:
-                    roi.setPen(pg.mkPen(r_dict["color"], width=3 if r_dict["checkbox"].isChecked() else 2))
+                        r_pos = roi.pos()
+                        r_size = roi.size()
+                        min_x = min(r_pos.x(), r_pos.x() + r_size.x())
+                        max_x = max(r_pos.x(), r_pos.x() + r_size.x())
+                        min_y = min(r_pos.y(), r_pos.y() + r_size.y())
+                        max_y = max(r_pos.y(), r_pos.y() + r_size.y())
+                        is_clicked = (min_x <= mp.x() <= max_x) and (min_y <= mp.y() <= max_y)
                     
-            self.roi_selected = hit
-            if not hit:
-                self.active_spatial_spectrum_roi = None
-                self.btn_edit_region.hide()
+                    if is_clicked:
+                        hit = True
+                        roi.setPen(pg.mkPen('y', width=3))
+                        self.active_spatial_spectrum_roi = roi
+                        
+                        # Sync UI tools with selected ROI type
+                        roi_type = r_dict.get("type", "Ellipse")
+                        self.combo_roi.blockSignals(True)
+                        self.combo_roi.setCurrentText(roi_type)
+                        self.combo_roi.blockSignals(False)
+                        
+                        if roi_type in ["Ellipse", "Rectangle", "Point (Beam)", "Custom Polygon"]:
+                            self.btn_edit_region.show()
+                        else:
+                            self.btn_edit_region.hide()
+                    else:
+                        roi.setPen(pg.mkPen(r_dict["color"], width=3 if r_dict["checkbox"].isChecked() else 2))
+                
+                self.roi_selected = hit
+                if not hit:
+                    self.active_spatial_spectrum_roi = None
+                    self.btn_edit_region.hide()
 
 
     # ==================== DATA LOADING ====================
@@ -2423,7 +2519,18 @@ class ExplorerTab(QWidget):
             self.delete_selected_spatial_regions()
 
     def open_edit_region_dialog(self):
-        if not getattr(self, 'active_spatial_spectrum_roi', None): return
+        roi = getattr(self, 'active_spatial_spectrum_roi', None)
+        roi_dict = None
+        
+        if roi:
+            roi_dict = next((r for r in getattr(self, 'spectrum_spatial_rois', []) if r["roi"] == roi), None)
+        else:
+            if getattr(self, 'spatial_rois_to_delete', []):
+                roi = self.spatial_rois_to_delete[-1]
+                roi_dict = next((r for r in getattr(self, 'spatial_rois', []) if r["roi"] == roi), None)
+                
+        if not roi: return
+        
         # Mutual exclusion: warn if Smooth dialog is currently open
         if getattr(self, '_smooth_dialog_active', False):
             msg = QMessageBox(self.window())
@@ -2434,13 +2541,12 @@ class ExplorerTab(QWidget):
             msg.exec_()
             return
         from src.gui.dialogs import RegionPropertiesDialog
-        roi_dict = next((r for r in getattr(self, 'spectrum_spatial_rois', []) if r["roi"] == self.active_spatial_spectrum_roi), None)
         # If an edit dialog is already open for this ROI, just raise it
         if getattr(self, '_region_dialog', None) and self._region_dialog.isVisible():
             self._region_dialog.raise_()
             self._region_dialog.activateWindow()
             return
-        dlg = RegionPropertiesDialog(self.active_spatial_spectrum_roi, self, parent=self.window(), roi_dict=roi_dict)
+        dlg = RegionPropertiesDialog(roi, self, parent=self.window(), roi_dict=roi_dict)
         self._region_dialog = dlg
         dlg.show()
 

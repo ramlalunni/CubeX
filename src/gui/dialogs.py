@@ -276,8 +276,12 @@ class RegionPropertiesDialog(QDialog):
         self.roi = roi
         self.roi_dict = roi_dict
         self.tab = explorer_tab
-        self.is_ellipse = isinstance(roi, pg.EllipseROI)
-        self.is_polyline = isinstance(roi, pg.PolyLineROI) and not self.is_ellipse
+        self.tool = roi_dict.get("tool", "Unknown") if roi_dict else "Unknown"
+        self.is_ellipse = isinstance(roi, pg.EllipseROI) or self.tool == "Ellipse"
+        self.is_line = isinstance(roi, pg.LineSegmentROI) or self.tool == "Line"
+        self.is_polyline = (isinstance(roi, pg.PolyLineROI) and not self.is_ellipse) or self.tool == "Custom Polygon"
+        self.is_point = self.tool == "Point"
+        self.is_rect = (isinstance(roi, pg.RectROI) and not self.is_ellipse) or self.tool == "Rectangle"
         self.setWindowTitle("Region Properties")
         self.setMinimumWidth(400)
         
@@ -339,22 +343,49 @@ class RegionPropertiesDialog(QDialog):
         self.lbl_center_img.setStyleSheet("font-family: monospace; font-size: 11px; color: #aaa;")
         layout.addWidget(self.lbl_center_img)
         
+        if self.is_point:
+            layout.addStretch()
+            self._updating = False
+            return
+            
+        if self.is_line:
+            # Add Start/End point fields for Line
+            line_layout = QVBoxLayout()
+            p1_layout = QHBoxLayout()
+            p1_layout.addWidget(QLabel("Start Point:"))
+            self.edit_p1x = QLineEdit(); self.edit_p1y = QLineEdit()
+            p1_layout.addWidget(self.edit_p1x); p1_layout.addWidget(self.edit_p1y)
+            line_layout.addLayout(p1_layout)
+            
+            p2_layout = QHBoxLayout()
+            p2_layout.addWidget(QLabel("End Point:"))
+            self.edit_p2x = QLineEdit(); self.edit_p2y = QLineEdit()
+            p2_layout.addWidget(self.edit_p2x); p2_layout.addWidget(self.edit_p2y)
+            line_layout.addLayout(p2_layout)
+            layout.addLayout(line_layout)
+            
+            self.edit_p1x.editingFinished.connect(self.apply_to_line)
+            self.edit_p1y.editingFinished.connect(self.apply_to_line)
+            self.edit_p2x.editingFinished.connect(self.apply_to_line)
+            self.edit_p2y.editingFinished.connect(self.apply_to_line)
+            
         # Size / Semi-axes
-        size_layout = QHBoxLayout()
-        size_label = "Semi-axes:" if self.is_ellipse else "Size:"
-        size_layout.addWidget(QLabel(size_label))
-        self.edit_w = QLineEdit()
-        self.edit_h = QLineEdit()
-        size_layout.addWidget(self.edit_w)
-        size_layout.addWidget(self.edit_h)
-        layout.addLayout(size_layout)
-        
-        self.lbl_size_img = QLabel("Image: ()")
-        self.lbl_size_img.setStyleSheet("font-family: monospace; font-size: 11px; color: #aaa;")
-        layout.addWidget(self.lbl_size_img)
+        if not self.is_line:
+            size_layout = QHBoxLayout()
+            size_label = "Semi-axes:" if self.is_ellipse else "Size:"
+            size_layout.addWidget(QLabel(size_label))
+            self.edit_w = QLineEdit()
+            self.edit_h = QLineEdit()
+            size_layout.addWidget(self.edit_w)
+            size_layout.addWidget(self.edit_h)
+            layout.addLayout(size_layout)
+            
+            self.lbl_size_img = QLabel("Image: ()")
+            self.lbl_size_img.setStyleSheet("font-family: monospace; font-size: 11px; color: #aaa;")
+            layout.addWidget(self.lbl_size_img)
         
         # Bottom-left and Top-right for Rectangle
-        if not self.is_ellipse:
+        if self.is_rect:
             bl_layout = QHBoxLayout()
             bl_layout.addWidget(QLabel("Bottom-left:"))
             self.edit_bl_x = QLineEdit()
@@ -390,10 +421,12 @@ class RegionPropertiesDialog(QDialog):
         # Connect editing finished
         self.edit_cx.editingFinished.connect(self.apply_to_roi)
         self.edit_cy.editingFinished.connect(self.apply_to_roi)
-        self.edit_w.editingFinished.connect(self.apply_to_roi)
-        self.edit_h.editingFinished.connect(self.apply_to_roi)
-        self.edit_pa.editingFinished.connect(self.apply_to_roi)
-        if not self.is_ellipse:
+        if not self.is_point and not self.is_line:
+            self.edit_w.editingFinished.connect(self.apply_to_roi)
+            self.edit_h.editingFinished.connect(self.apply_to_roi)
+        if not self.is_point:
+            self.edit_pa.editingFinished.connect(self.apply_to_roi)
+        if self.is_rect:
             self.edit_bl_x.editingFinished.connect(self.apply_to_roi_from_bounds)
             self.edit_bl_y.editingFinished.connect(self.apply_to_roi_from_bounds)
             self.edit_tr_x.editingFinished.connect(self.apply_to_roi_from_bounds)
@@ -419,12 +452,51 @@ class RegionPropertiesDialog(QDialog):
             cx = pos.x() + w / 2.0
             cy = pos.y() + h / 2.0
             
-            self.edit_pa.setText(f"{angle:.5f}")
+            from astropy.coordinates import SkyCoord
+            import astropy.units as u
+
+            if self.is_line:
+                # Update line endpoints
+                hndls = self.roi.getHandles()
+                if len(hndls) >= 2:
+                    p1_p = self.roi.mapToParent(hndls[0].pos())
+                    p2_p = self.roi.mapToParent(hndls[1].pos())
+                    
+                    # Calculate true center as midpoint of endpoints
+                    cx = (p1_p.x() + p2_p.x()) / 2.0
+                    cy = (p1_p.y() + p2_p.y()) / 2.0
+                    
+                    if self.use_world and self.wcs:
+                        px1 = (self.tab.nx / 2) - (p1_p.x() / self.tab.pix_scale_arcsec)
+                        py1 = (p1_p.y() / self.tab.pix_scale_arcsec) + (self.tab.ny / 2)
+                        ra1, dec1 = self.wcs.pixel_to_world_values(px1, py1)
+                        sc1 = SkyCoord(ra1, dec1, unit='deg')
+                        self.edit_p1x.setText(sc1.ra.to_string(unit=u.hour, sep=':', precision=6))
+                        self.edit_p1y.setText(sc1.dec.to_string(unit=u.deg, sep=':', precision=6))
+                        
+                        px2 = (self.tab.nx / 2) - (p2_p.x() / self.tab.pix_scale_arcsec)
+                        py2 = (p2_p.y() / self.tab.pix_scale_arcsec) + (self.tab.ny / 2)
+                        ra2, dec2 = self.wcs.pixel_to_world_values(px2, py2)
+                        sc2 = SkyCoord(ra2, dec2, unit='deg')
+                        self.edit_p2x.setText(sc2.ra.to_string(unit=u.hour, sep=':', precision=6))
+                        self.edit_p2y.setText(sc2.dec.to_string(unit=u.deg, sep=':', precision=6))
+                        
+                        # Calculate astronomical PA (East of North)
+                        angle = sc1.position_angle(sc2).deg
+                    else:
+                        self.edit_p1x.setText(f"{p1_p.x():.5f}")
+                        self.edit_p1y.setText(f"{p1_p.y():.5f}")
+                        self.edit_p2x.setText(f"{p2_p.x():.5f}")
+                        self.edit_p2y.setText(f"{p2_p.y():.5f}")
+                        
+                        # Calculate PA in image coordinates (North UP, East RIGHT)
+                        import numpy as np
+                        angle = np.degrees(np.arctan2(p2_p.x() - p1_p.x(), p2_p.y() - p1_p.y())) % 360
+
+            if not self.is_point:
+                self.edit_pa.setText(f"{angle:.5f}")
             
             if self.use_world and self.wcs:
-                from astropy.coordinates import SkyCoord
-                import astropy.units as u
-                
                 px = (self.tab.nx / 2) - (cx / self.tab.pix_scale_arcsec)
                 py = (cy / self.tab.pix_scale_arcsec) + (self.tab.ny / 2)
                 ra, dec = self.wcs.pixel_to_world_values(px, py)
@@ -432,13 +504,14 @@ class RegionPropertiesDialog(QDialog):
                 self.edit_cx.setText(sc.ra.to_string(unit=u.hour, sep=':', precision=7))
                 self.edit_cy.setText(sc.dec.to_string(unit=u.deg, sep=':', precision=6))
                 
-                self.edit_w.setText(f"{w:.5f}\"")
-                self.edit_h.setText(f"{h:.5f}\"")
+                if not self.is_point and not self.is_line:
+                    self.edit_w.setText(f"{w:.5f}\"")
+                    self.edit_h.setText(f"{h:.5f}\"")
+                    self.lbl_size_img.setText(f"Image: ({w / self.tab.pix_scale_arcsec:.3f} px, {h / self.tab.pix_scale_arcsec:.3f} px)")
                 
                 self.lbl_center_img.setText(f"Image: ({px:.3f} px, {py:.3f} px)")
-                self.lbl_size_img.setText(f"Image: ({w / self.tab.pix_scale_arcsec:.3f} px, {h / self.tab.pix_scale_arcsec:.3f} px)")
                 
-                if not self.is_ellipse:
+                if self.is_rect:
                     bl_px = (self.tab.nx / 2) - (pos.x() / self.tab.pix_scale_arcsec)
                     bl_py = (pos.y() / self.tab.pix_scale_arcsec) + (self.tab.ny / 2)
                     bl_ra, bl_dec = self.wcs.pixel_to_world_values(bl_px, bl_py)
@@ -460,12 +533,13 @@ class RegionPropertiesDialog(QDialog):
             else:
                 self.edit_cx.setText(f"{cx:.5f}")
                 self.edit_cy.setText(f"{cy:.5f}")
-                self.edit_w.setText(f"{w:.5f}")
-                self.edit_h.setText(f"{h:.5f}")
+                if not self.is_point and not self.is_line:
+                    self.edit_w.setText(f"{w:.5f}")
+                    self.edit_h.setText(f"{h:.5f}")
+                    self.lbl_size_img.setText(f"Image: ({w:.3f} arcsec, {h:.3f} arcsec)")
                 self.lbl_center_img.setText(f"Image: ({cx:.3f} arcsec, {cy:.3f} arcsec)")
-                self.lbl_size_img.setText(f"Image: ({w:.3f} arcsec, {h:.3f} arcsec)")
                 
-                if not self.is_ellipse:
+                if self.is_rect:
                     self.edit_bl_x.setText(f"{pos.x():.5f}")
                     self.edit_bl_y.setText(f"{pos.y():.5f}")
                     self.lbl_bl_img.setText("")
@@ -489,9 +563,6 @@ class RegionPropertiesDialog(QDialog):
         try:
             cx_str = self.edit_cx.text()
             cy_str = self.edit_cy.text()
-            w_val = float(self.edit_w.text().replace('"', ''))
-            h_val = float(self.edit_h.text().replace('"', ''))
-            pa_val = float(self.edit_pa.text())
             
             if self.use_world and self.wcs:
                 ra = self._parse_coord(cx_str, is_ra=True)
@@ -499,21 +570,53 @@ class RegionPropertiesDialog(QDialog):
                 px, py = self.wcs.world_to_pixel_values(ra, dec)
                 cx = (self.tab.nx / 2 - px) * self.tab.pix_scale_arcsec
                 cy = (py - self.tab.ny / 2) * self.tab.pix_scale_arcsec
-                w, h = w_val, h_val
             else:
                 cx, cy = float(cx_str), float(cy_str)
-                w, h = w_val, h_val
                 
-            pos_x = cx - w / 2.0
-            pos_y = cy - h / 2.0
-            
-            self.roi.blockSignals(True)
-            self.roi.setPos([pos_x, pos_y])
-            self.roi.setSize([w, h])
-            self.roi.setAngle(pa_val)
-            self.roi.blockSignals(False)
+            if self.is_point:
+                w, h = self.roi.size().x(), self.roi.size().y()
+                pos_x = cx - w / 2.0
+                pos_y = cy - h / 2.0
+                self.roi.blockSignals(True)
+                self.roi.setPos([pos_x, pos_y])
+                self.roi.blockSignals(False)
+            elif self.is_line:
+                hndls = self.roi.getHandles()
+                if len(hndls) >= 2:
+                    p1_p = self.roi.mapToParent(hndls[0].pos())
+                    p2_p = self.roi.mapToParent(hndls[1].pos())
+                    
+                    import numpy as np
+                    L = np.hypot(p2_p.x() - p1_p.x(), p2_p.y() - p1_p.y())
+                    pa_val = float(self.edit_pa.text())
+                    
+                    rad = np.radians(pa_val)
+                    dx = (L / 2.0) * np.sin(rad)
+                    dy = (L / 2.0) * np.cos(rad)
+                    
+                    new_p1 = [cx - dx, cy - dy]
+                    new_p2 = [cx + dx, cy + dy]
+                    
+                    self.roi.blockSignals(True)
+                    self.roi.movePoint(hndls[0], new_p1, finish=False)
+                    self.roi.movePoint(hndls[1], new_p2, finish=True)
+                    self.roi.blockSignals(False)
+            else:
+                w_val = float(self.edit_w.text().replace('"', ''))
+                h_val = float(self.edit_h.text().replace('"', ''))
+                pa_val = float(self.edit_pa.text())
+                
+                pos_x = cx - w_val / 2.0
+                pos_y = cy - h_val / 2.0
+                
+                self.roi.blockSignals(True)
+                self.roi.setPos([pos_x, pos_y])
+                self.roi.setSize([w_val, h_val])
+                self.roi.setAngle(pa_val)
+                self.roi.blockSignals(False)
+                
             self.roi.sigRegionChanged.emit(self.roi)
-        except ValueError:
+        except Exception:
             pass
         finally:
             self._updating = False
@@ -565,8 +668,17 @@ class RegionPropertiesDialog(QDialog):
                 old_name = self.roi_dict["name"]
                 if new_name != old_name:
                     self.roi_dict["name"] = new_name
-                    self.roi_dict["checkbox"].setText(new_name)
                     
+                    # Update Checkbox if it exists (Spectrum ROIs)
+                    if "checkbox" in self.roi_dict:
+                        self.roi_dict["checkbox"].setText(new_name)
+                    
+                    # Update Dropdown if it exists (Spatial ROIs)
+                    if hasattr(self.tab, 'combo_spatial_regions'):
+                        idx = self.tab.combo_spatial_regions.findText(old_name)
+                        if idx >= 0:
+                            self.tab.combo_spatial_regions.setItemText(idx, new_name)
+
                     if old_name in self.tab.spectrum_curves:
                         self.tab.spectrum_curves[new_name] = self.tab.spectrum_curves.pop(old_name)
                         if hasattr(self.tab.spectrum_curves[new_name], 'opts'):
@@ -576,13 +688,53 @@ class RegionPropertiesDialog(QDialog):
                         if hasattr(self.tab.spectrum_curves_smooth[new_name], 'opts'):
                             self.tab.spectrum_curves_smooth[new_name].opts['name'] = new_name
                     
-                    if hasattr(self.roi_dict, 'text_item'):
+                    if "text_item" in self.roi_dict:
                         self.roi_dict["text_item"].setText(new_name)
                         
                     self.tab.update_spectrum()
                     self.tab.update_spectrum_region_calc()
                     # Refresh spectral statistics popup if open
                     self.tab.refresh_spectral_stats_apertures()
+
+    def apply_to_line(self):
+        if self._updating: return
+        self._updating = True
+        try:
+            from astropy.coordinates import SkyCoord
+            import astropy.units as u
+            
+            p1x_str = self.edit_p1x.text()
+            p1y_str = self.edit_p1y.text()
+            p2x_str = self.edit_p2x.text()
+            p2y_str = self.edit_p2y.text()
+            
+            if self.use_world and self.wcs:
+                ra1 = self._parse_coord(p1x_str, is_ra=True)
+                dec1 = self._parse_coord(p1y_str, is_ra=False)
+                px1, py1 = self.wcs.world_to_pixel_values(ra1, dec1)
+                x1 = (self.tab.nx / 2 - px1) * self.tab.pix_scale_arcsec
+                y1 = (py1 - self.tab.ny / 2) * self.tab.pix_scale_arcsec
+                
+                ra2 = self._parse_coord(p2x_str, is_ra=True)
+                dec2 = self._parse_coord(p2y_str, is_ra=False)
+                px2, py2 = self.wcs.world_to_pixel_values(ra2, dec2)
+                x2 = (self.tab.nx / 2 - px2) * self.tab.pix_scale_arcsec
+                y2 = (py2 - self.tab.ny / 2) * self.tab.pix_scale_arcsec
+            else:
+                x1, y1 = float(p1x_str), float(p1y_str)
+                x2, y2 = float(p2x_str), float(p2y_str)
+                
+            handles = self.roi.getHandles()
+            self.roi.blockSignals(True)
+            self.roi.movePoint(handles[0], [x1, y1], finish=False)
+            self.roi.movePoint(handles[1], [x2, y2], finish=True)
+            self.roi.blockSignals(False)
+            self.roi.sigRegionChanged.emit(self.roi)
+        except Exception:
+            pass
+        finally:
+            self._updating = False
+            self.update_from_roi()
 
 
 # ==============================================================================
