@@ -271,9 +271,10 @@ class RegionPropertiesDialog(QDialog):
     Dialog to adjust the properties (center, size, P.A.) of Ellipse and Rectangle ROIs.
     Supports Image and World coordinates (if WCS is available).
     """
-    def __init__(self, roi, explorer_tab, parent=None):
+    def __init__(self, roi, explorer_tab, parent=None, roi_dict=None):
         super().__init__(parent or explorer_tab)
         self.roi = roi
+        self.roi_dict = roi_dict
         self.tab = explorer_tab
         self.is_ellipse = isinstance(roi, pg.EllipseROI)
         self.setWindowTitle("Region Properties")
@@ -289,6 +290,15 @@ class RegionPropertiesDialog(QDialog):
     def initUI(self):
         layout = QVBoxLayout(self)
         
+        if self.roi_dict is not None:
+            name_layout = QHBoxLayout()
+            name_layout.addWidget(QLabel("Region Name:"))
+            self.edit_name = QLineEdit()
+            self.edit_name.setText(self.roi_dict.get("name", ""))
+            name_layout.addWidget(self.edit_name)
+            layout.addLayout(name_layout)
+            self.edit_name.editingFinished.connect(self.apply_name)
+            
         # Coordinate selection
         coord_layout = QHBoxLayout()
         coord_layout.addWidget(QLabel("Coordinate:"))
@@ -540,6 +550,33 @@ class RegionPropertiesDialog(QDialog):
         finally:
             self._updating = False
             self.update_from_roi()
+
+    def apply_name(self):
+        if self.roi_dict:
+            new_name = self.edit_name.text().strip()
+            if new_name:
+                old_name = self.roi_dict["name"]
+                if new_name != old_name:
+                    self.roi_dict["name"] = new_name
+                    self.roi_dict["checkbox"].setText(new_name)
+                    
+                    if old_name in self.tab.spectrum_curves:
+                        self.tab.spectrum_curves[new_name] = self.tab.spectrum_curves.pop(old_name)
+                        if hasattr(self.tab.spectrum_curves[new_name], 'opts'):
+                            self.tab.spectrum_curves[new_name].opts['name'] = new_name
+                    if hasattr(self.tab, 'spectrum_curves_smooth') and old_name in self.tab.spectrum_curves_smooth:
+                        self.tab.spectrum_curves_smooth[new_name] = self.tab.spectrum_curves_smooth.pop(old_name)
+                        if hasattr(self.tab.spectrum_curves_smooth[new_name], 'opts'):
+                            self.tab.spectrum_curves_smooth[new_name].opts['name'] = new_name
+                    
+                    if hasattr(self.roi_dict, 'text_item'):
+                        self.roi_dict["text_item"].setText(new_name)
+                        
+                    self.tab.update_spectrum()
+                    self.tab.update_spectrum_region_calc()
+                    # Refresh spectral statistics popup if open
+                    self.tab.refresh_spectral_stats_apertures()
+
 
 # ==============================================================================
 # SPECTRAL SMOOTHING DIALOG

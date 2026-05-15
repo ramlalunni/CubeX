@@ -7,9 +7,16 @@ from astropy.wcs import WCS
 import astropy.constants as const
 import astropy.units as u
 from PyQt5.QtCore import QTimer, Qt, QThread, pyqtSignal
+from PyQt5.QtGui import QPainterPath
 from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
                              QPushButton, QFileDialog, QMessageBox, QLineEdit, 
-                             QComboBox, QFrame, QStackedWidget, QSizePolicy, QTabWidget)
+                             QComboBox, QFrame, QStackedWidget, QSizePolicy, QTabWidget,
+                             QGroupBox, QCheckBox, QDialog, QScrollArea, QGridLayout)
+
+try:
+    from PyQt5.QtWidgets import FlowLayout
+except ImportError:
+    pass # we will use QHBoxLayout if FlowLayout is not easily available
 from spectral_cube import SpectralCube
 
 # Optional Numba acceleration (graceful fallback to NumPy when not installed)
@@ -629,9 +636,16 @@ class ExplorerTab(QWidget):
         
         self.rest_freq_hz = None
         self.catalog_overlay_items = []
-        self.worker = None 
+        self.spectrum_spatial_rois = [] # List of {"name": str, "roi": ROI, "checkbox": QCheckBox, "color": str}
+        self.active_spatial_spectrum_roi = None
+        self.roi_selected = False
+
+        # Polygon drawing state
+        self.is_drawing_polygon = False
+        self.polygon_points = []
+        self.polygon_preview_line = None
         
-        self.current_roi = None
+        self.region_colors = ['#2ecc71', '#fd6b6b', '#9b59b6', '#e74c3c', '#e67e22', '#1abc9c', '#e84393', '#fd79a8', '#00b894', '#a29bfe']
         self.roi_selected = False
         self.current_m0_raw = None
         self.active_picker_panel = None 
@@ -733,7 +747,7 @@ class ExplorerTab(QWidget):
         self.combo_roi = QComboBox()
         self.combo_roi.setFixedHeight(22)
         self.combo_roi.addItems(["Whole Map", "Point (Beam)", "Ellipse", "Rectangle", "Custom Polygon"])
-        self.combo_roi.currentTextChanged.connect(self.change_roi)
+        self.combo_roi.activated[str].connect(self.change_roi)
         roi_layout.addWidget(self.combo_roi)
         
         self.btn_edit_region = QPushButton("Edit region")
@@ -868,21 +882,31 @@ class ExplorerTab(QWidget):
         fix_axis_scaling(self.plot_widget.getAxis('left')) 
         self.plot_widget.setLabel('bottom', 'Radio Velocity (km/s)')
         self.plot_widget.setLabel('left', 'Flux') 
+        self.plot_widget.addLegend(offset=(10, 10))
         
-        self.spectrum_curve = pg.PlotDataItem([], [], stepMode="center", fillLevel=0, brush=(255, 255, 255, 80), pen=pg.mkPen('w', width=2))
+        self.spectrum_curves = {} # mapping from region name to PlotDataItem
+        # Original curve (fallback for Whole Map)
+        self.spectrum_curve = pg.PlotDataItem([], [], stepMode="center", pen=pg.mkPen('w', width=2))
         self.plot_widget.addItem(self.spectrum_curve)
         
         self.v_line = pg.InfiniteLine(angle=90, movable=False, pen=pg.mkPen('g', width=2, style=Qt.DashLine))
         self.v_line.hide()
         self.plot_widget.addItem(self.v_line)
         
-        self.region = pg.LinearRegionItem([0, 1])
+        self.region = pg.LinearRegionItem([0, 1], brush=pg.mkBrush(52, 152, 219, 40))
         self.region.setZValue(10)
         self.region.hide()
         for line in self.region.lines:
             line.setPen(pg.mkPen(color='#3498db', width=3))
             line.setHoverPen(pg.mkPen(color='#f1c40f', width=5))
         self.plot_widget.addItem(self.region)
+        
+        self.box_regions = QGroupBox("Regions")
+        self.box_regions.setStyleSheet("QGroupBox { color: white; font-weight: bold; } QCheckBox { color: white; }")
+        self.box_regions_layout = QHBoxLayout(self.box_regions)
+        self.box_regions_layout.setContentsMargins(5, 10, 5, 5)
+        self.box_regions.hide()
+        spectrum_layout.addWidget(self.box_regions)
         
         self.spectrum_tabs = QTabWidget()
         self.spectrum_tabs.addTab(self.plot_widget, "Original")
@@ -896,8 +920,10 @@ class ExplorerTab(QWidget):
         fix_axis_scaling(self.plot_widget_smooth.getAxis('left'))
         self.plot_widget_smooth.setLabel('bottom', 'Radio Velocity (km/s)')
         self.plot_widget_smooth.setLabel('left', 'Flux')
+        self.plot_widget_smooth.addLegend(offset=(10, 10))
         
-        self.spectrum_curve_smooth = pg.PlotDataItem([], [], stepMode="center", fillLevel=0, brush=(255, 255, 255, 80), pen=pg.mkPen('c', width=2))
+        self.spectrum_curves_smooth = {}
+        self.spectrum_curve_smooth = pg.PlotDataItem([], [], stepMode="center", pen=pg.mkPen('c', width=2))
         self.plot_widget_smooth.addItem(self.spectrum_curve_smooth)
         
         self.smoothing_params = None
@@ -935,51 +961,28 @@ class ExplorerTab(QWidget):
         self.input_vmax.setMinimumWidth(80)
         input_layout.addWidget(self.input_vmax)
         
-        # New Selection UI
-        input_layout.addStretch()
-        
-        self.lbl_regions = QLabel("Regions:")
-        input_layout.addWidget(self.lbl_regions)
-        
-        self.combo_regions = QComboBox()
-        self.combo_regions.setSizeAdjustPolicy(QComboBox.AdjustToContents)
-        self.combo_regions.addItem("None")
-        self.combo_regions.currentTextChanged.connect(self.on_region_selected)
-        input_layout.addWidget(self.combo_regions)
-        
-        self.lbl_plus1 = QLabel("+")
-        input_layout.addWidget(self.lbl_plus1)
-        
-        self.combo_regions_2 = QComboBox()
-        self.combo_regions_2.setSizeAdjustPolicy(QComboBox.AdjustToContents)
-        self.combo_regions_2.addItem("None")
-        self.combo_regions_2.currentTextChanged.connect(self.on_region_selected)
-        input_layout.addWidget(self.combo_regions_2)
-
-        self.lbl_plus2 = QLabel("+")
-        input_layout.addWidget(self.lbl_plus2)
-        
-        self.combo_regions_3 = QComboBox()
-        self.combo_regions_3.setSizeAdjustPolicy(QComboBox.AdjustToContents)
-        self.combo_regions_3.addItem("None")
-        self.combo_regions_3.currentTextChanged.connect(self.on_region_selected)
-        input_layout.addWidget(self.combo_regions_3)
-        
-        self.lbl_calc = QLabel("| Calc:")
-        input_layout.addWidget(self.lbl_calc)
-        
+        # Hidden backing widgets (used by update_spectrum_region_calc)
+        self.combo_regions = QComboBox(); self.combo_regions.addItem("None")
+        self.combo_regions_2 = QComboBox(); self.combo_regions_2.addItem("None")
+        self.combo_regions_3 = QComboBox(); self.combo_regions_3.addItem("None")
         self.combo_region_calc = QComboBox()
         self.combo_region_calc.addItems(["Integrated intensity", "RMS"])
-        self.combo_region_calc.currentTextChanged.connect(self.update_spectrum_region_calc)
-        input_layout.addWidget(self.combo_region_calc)
-        
         self.lbl_region_result = QLabel("---")
-        self.lbl_region_result.setStyleSheet("font-weight: bold; color: #f1c40f;")
-        input_layout.addWidget(self.lbl_region_result)
-        
+        self.lbl_regions = QLabel("")
+        self.lbl_plus1 = QLabel("")
+        self.lbl_plus2 = QLabel("")
+        self.lbl_calc = QLabel("")
+
+        # Spectral Statistics popup button
+        self.btn_spectral_stats = QPushButton("📊 Spectral Statistics")
+        self.btn_spectral_stats.setToolTip("Open spectral statistics panel for drawn velocity boxes")
+        self.btn_spectral_stats.clicked.connect(self.open_spectral_stats_popup)
+        self.btn_spectral_stats.hide()
+        input_layout.addWidget(self.btn_spectral_stats)
+
         self.spectrum_rois = []
         self.rois_to_delete = []
-        self.update_region_ui_visibility()
+        self._spectral_stats_popup = None
         
         spectrum_layout.addLayout(input_layout)
 
@@ -1129,8 +1132,8 @@ class ExplorerTab(QWidget):
         self.set_active_panel('channel')
 
         self.plot_channel.scene().sigMouseMoved.connect(lambda pos: self.hover_event(pos, self.plot_channel, self.get_current_channel_data(), self.lbl_hover_ch, 'channel'))
-        self.plot_widget.scene().sigMouseMoved.connect(self.hover_spectrum)
-        self.plot_widget_smooth.scene().sigMouseMoved.connect(self.hover_spectrum)
+        self.plot_widget.scene().sigMouseMoved.connect(lambda pos: self.hover_spectrum(pos, self.plot_widget))
+        self.plot_widget_smooth.scene().sigMouseMoved.connect(lambda pos: self.hover_spectrum(pos, self.plot_widget_smooth))
         self.pv_plot_item.scene().sigMouseMoved.connect(self.hover_pv)
         
         self.plot_widget.scene().sigMouseClicked.connect(lambda event: self.universal_click_handler(event, self.plot_widget))
@@ -1157,18 +1160,34 @@ class ExplorerTab(QWidget):
             self.change_spatial_tool(self.combo_spatial_tool.currentText())
 
     def open_smoothing_dialog(self):
+        # Mutual exclusion: warn if Edit Region dialog is open
+        if getattr(self, '_region_dialog', None) and self._region_dialog.isVisible():
+            msg = QMessageBox(self.window())
+            msg.setWindowTitle("Dialog Open")
+            msg.setText("Please close the 'Edit Region' dialog before opening Smooth.")
+            msg.setIcon(QMessageBox.Information)
+            msg.setWindowFlags(msg.windowFlags() | Qt.WindowStaysOnTopHint)
+            msg.exec_()
+            self._region_dialog.raise_()
+            self._region_dialog.activateWindow()
+            return
         from src.gui.dialogs import SpectralSmoothingDialog
-        dialog = SpectralSmoothingDialog(self)
-        if dialog.exec_():
-            params = dialog.get_params()
-            if params:
-                self.smoothing_params = params
-                if self.spectrum_tabs.indexOf(self.plot_widget_smooth) == -1:
-                    self.spectrum_tabs.addTab(self.plot_widget_smooth, "Smoothed")
-                self.spectrum_tabs.tabBar().show()
-                self.spectrum_tabs.setCurrentWidget(self.plot_widget_smooth)
-                self.btn_remove_smooth.show()
-                self.update_spectrum()
+        self._smooth_dialog_active = True
+        try:
+            dialog = SpectralSmoothingDialog(self.window())
+            dialog.setWindowModality(Qt.WindowModal)
+            if dialog.exec_():
+                params = dialog.get_params()
+                if params:
+                    self.smoothing_params = params
+                    if self.spectrum_tabs.indexOf(self.plot_widget_smooth) == -1:
+                        self.spectrum_tabs.addTab(self.plot_widget_smooth, "Smoothed")
+                    self.spectrum_tabs.tabBar().show()
+                    self.spectrum_tabs.setCurrentWidget(self.plot_widget_smooth)
+                    self.btn_remove_smooth.show()
+                    self.update_spectrum()
+        finally:
+            self._smooth_dialog_active = False
 
     def remove_smoothed_spectrum(self):
         self.smoothing_params = None
@@ -1862,18 +1881,51 @@ class ExplorerTab(QWidget):
                             self.update_moment_maps()
             return 
             
-        if source_plot == self.plot_channel and self.current_roi is not None:
+        if source_plot == self.plot_channel and self.spectrum_spatial_rois:
             mp = self.plot_channel.vb.mapSceneToView(event.scenePos())
-            r_pos = self.current_roi.pos()
-            r_size = self.current_roi.size()
-            min_x = min(r_pos.x(), r_pos.x() + r_size.x())
-            max_x = max(r_pos.x(), r_pos.x() + r_size.x())
-            min_y = min(r_pos.y(), r_pos.y() + r_size.y())
-            max_y = max(r_pos.y(), r_pos.y() + r_size.y())
-            
-            is_clicked = (min_x <= mp.x() <= max_x) and (min_y <= mp.y() <= max_y)
-            self.roi_selected = True if is_clicked else False
-            self.current_roi.setPen(pg.mkPen('y', width=3) if is_clicked else pg.mkPen('c', width=2))
+            hit = False
+            for r_dict in self.spectrum_spatial_rois:
+                roi = r_dict["roi"]
+                if isinstance(roi, pg.PolyLineROI):
+                    path = QPainterPath()
+                    pts = [roi.mapToParent(h.pos()) for h in roi.getHandles()]
+                    if pts:
+                        path.moveTo(pts[0])
+                        for p in pts[1:]:
+                            path.lineTo(p)
+                        path.closeSubpath()
+                    is_clicked = path.contains(mp)
+                else:
+                    r_pos = roi.pos()
+                    r_size = roi.size()
+                    min_x = min(r_pos.x(), r_pos.x() + r_size.x())
+                    max_x = max(r_pos.x(), r_pos.x() + r_size.x())
+                    min_y = min(r_pos.y(), r_pos.y() + r_size.y())
+                    max_y = max(r_pos.y(), r_pos.y() + r_size.y())
+                    is_clicked = (min_x <= mp.x() <= max_x) and (min_y <= mp.y() <= max_y)
+                if is_clicked:
+                    hit = True
+                    roi.setPen(pg.mkPen('y', width=3))
+                    self.active_spatial_spectrum_roi = roi
+                    
+                    # Sync UI tools with selected ROI type
+                    roi_type = r_dict.get("type", "Ellipse")
+                    self.combo_roi.blockSignals(True)
+                    self.combo_roi.setCurrentText(roi_type)
+                    self.combo_roi.blockSignals(False)
+                    
+                    if roi_type in ["Ellipse", "Rectangle", "Point (Beam)"]:
+                        self.btn_edit_region.show()
+                    else:
+                        self.btn_edit_region.hide()
+                else:
+                    roi.setPen(pg.mkPen(r_dict["color"], width=3 if r_dict["checkbox"].isChecked() else 2))
+                    
+            self.roi_selected = hit
+            if not hit:
+                self.active_spatial_spectrum_roi = None
+                self.btn_edit_region.hide()
+
 
     # ==================== DATA LOADING ====================
     def load_file(self, file_name):
@@ -2167,125 +2219,305 @@ class ExplorerTab(QWidget):
 
     def change_roi(self, roi_type):
         if self.cube_clean is None: return
-        if self.current_roi is not None:
-            self.view_channel.removeItem(self.current_roi)
-            self.current_roi = None
-        cx, cy = 0, 0 
+        
+        if roi_type == "Whole Map":
+            for r_dict in getattr(self, 'spectrum_spatial_rois', []):
+                r_dict["checkbox"].blockSignals(True)
+                r_dict["checkbox"].setChecked(False)
+                r_dict["checkbox"].blockSignals(False)
+            self.update_spectrum()
+            return
+            
+        num_rois = len(getattr(self, 'spectrum_spatial_rois', []))
         sz = self.nx * self.pix_scale_arcsec * 0.2
+        offset = num_rois * sz * 0.15
+        cx, cy = offset, offset
         
         if hasattr(self, 'btn_edit_region'):
-            if roi_type in ["Ellipse", "Rectangle"]:
+            if roi_type in ["Ellipse", "Rectangle", "Point (Beam)"]:
                 self.btn_edit_region.show()
             else:
                 self.btn_edit_region.hide()
                 
-        if roi_type == "Point (Beam)": self.current_roi = pg.CircleROI([cx, cy], [self.pix_scale_arcsec*3, self.pix_scale_arcsec*3], pen='#f1c40f')
+        new_roi = None
+        if roi_type == "Point (Beam)": new_roi = pg.CircleROI([cx, cy], [self.pix_scale_arcsec*3, self.pix_scale_arcsec*3], pen='#f1c40f')
         elif roi_type == "Ellipse": 
-            self.current_roi = pg.EllipseROI([cx, cy], [sz, sz], pen='#f1c40f')
-            self.current_roi.addScaleHandle([0, 0], [1, 1])
-            self.current_roi.addScaleHandle([1, 1], [0, 0])
-            self.current_roi.addScaleHandle([0, 1], [1, 0])
-            self.current_roi.addScaleHandle([1, 0], [0, 1])
-            self.current_roi.addScaleHandle([0.5, 0], [0.5, 1])
-            self.current_roi.addScaleHandle([0.5, 1], [0.5, 0])
-            self.current_roi.addScaleHandle([0, 0.5], [1, 0.5])
-            self.current_roi.addScaleHandle([1, 0.5], [0, 0.5])
-            make_roi_rotatable_with_ctrl(self.current_roi)
+            new_roi = pg.EllipseROI([cx, cy], [sz, sz], pen='#f1c40f')
+            new_roi.addScaleHandle([0, 0], [1, 1])
+            new_roi.addScaleHandle([1, 1], [0, 0])
+            new_roi.addScaleHandle([0, 1], [1, 0])
+            new_roi.addScaleHandle([1, 0], [0, 1])
+            new_roi.addScaleHandle([0.5, 0], [0.5, 1])
+            new_roi.addScaleHandle([0.5, 1], [0.5, 0])
+            new_roi.addScaleHandle([0, 0.5], [1, 0.5])
+            new_roi.addScaleHandle([1, 0.5], [0, 0.5])
+            make_roi_rotatable_with_ctrl(new_roi)
         elif roi_type == "Rectangle": 
-            self.current_roi = pg.RectROI([cx, cy], [sz, sz], pen='#f1c40f')
-            self.current_roi.addScaleHandle([0, 0], [1, 1])
-            self.current_roi.addScaleHandle([1, 1], [0, 0])
-            self.current_roi.addScaleHandle([0, 1], [1, 0])
-            self.current_roi.addScaleHandle([1, 0], [0, 1])
-            self.current_roi.addScaleHandle([0.5, 0], [0.5, 1])
-            self.current_roi.addScaleHandle([0.5, 1], [0.5, 0])
-            self.current_roi.addScaleHandle([0, 0.5], [1, 0.5])
-            self.current_roi.addScaleHandle([1, 0.5], [0, 0.5])
-            make_roi_rotatable_with_ctrl(self.current_roi)
-        elif roi_type == "Custom Polygon": self.current_roi = pg.PolyLineROI([[cx, cy], [cx+sz, cy], [cx+sz/2, cy+sz]], closed=True, pen='#f1c40f')
-        if self.current_roi is not None:
-            self.view_channel.addItem(self.current_roi)
-            self.current_roi.sigRegionChanged.connect(self.update_spectrum)
-            self.roi_selected = True 
-            self.current_roi.setPen(pg.mkPen('#f1c40f', width=3))
+            new_roi = pg.RectROI([cx, cy], [sz, sz], pen='#f1c40f')
+            new_roi.addScaleHandle([0, 0], [1, 1])
+            new_roi.addScaleHandle([1, 1], [0, 0])
+            new_roi.addScaleHandle([0, 1], [1, 0])
+            new_roi.addScaleHandle([1, 0], [0, 1])
+            new_roi.addScaleHandle([0.5, 0], [0.5, 1])
+            new_roi.addScaleHandle([0.5, 1], [0.5, 0])
+            new_roi.addScaleHandle([0, 0.5], [1, 0.5])
+            new_roi.addScaleHandle([1, 0.5], [0, 0.5])
+            make_roi_rotatable_with_ctrl(new_roi)
+        elif roi_type == "Custom Polygon": 
+            new_roi = pg.PolyLineROI([[cx, cy], [cx+sz, cy], [cx+sz/2, cy+sz]], closed=True, pen='#f1c40f')
+            def custom_shape(roi=new_roi):
+                p = QPainterPath()
+                if not roi.handles: return p
+                p.moveTo(roi.handles[0]['item'].pos())
+                for h in roi.handles[1:]:
+                    p.lineTo(h['item'].pos())
+                p.closeSubpath()
+                return p
+            new_roi.shape = custom_shape
+        
+        if new_roi is not None:
+            col = self.region_colors[len(self.spectrum_spatial_rois) % len(self.region_colors)]
+            new_roi.setPen(pg.mkPen(col, width=3))
+            self.view_channel.addItem(new_roi)
+            new_roi.sigRegionChanged.connect(self.update_spectrum)
+            
+            # Uncheck existing
+            for r_dict in self.spectrum_spatial_rois:
+                r_dict["checkbox"].blockSignals(True)
+                r_dict["checkbox"].setChecked(False)
+                r_dict["checkbox"].blockSignals(False)
+                r_dict["roi"].setPen(pg.mkPen(r_dict["color"], width=2))
+                
+            name = f"Region {len(self.spectrum_spatial_rois) + 1}"
+            cb = QCheckBox(name)
+            cb.setChecked(True)
+            cb.setStyleSheet(f"color: {col}; font-weight: bold;")
+            cb.toggled.connect(self.update_spectrum)
+            self.box_regions_layout.addWidget(cb)
+            
+            self.spectrum_spatial_rois.append({
+                "name": name,
+                "roi": new_roi,
+                "checkbox": cb,
+                "color": col,
+                "type": roi_type
+            })
+            self.roi_selected = True
+            self.active_spatial_spectrum_roi = new_roi
+            
+            if len(self.spectrum_spatial_rois) > 1:
+                self.box_regions.show()
+            self.refresh_spectral_stats_apertures()
+                
         self.update_spectrum()
         
+    def remove_spatial_spectrum_roi(self, roi):
+        for i, r_dict in enumerate(self.spectrum_spatial_rois):
+            if r_dict["roi"] == roi:
+                # Remove from view
+                if roi.scene():
+                    roi.scene().removeItem(roi)
+                else:
+                    self.view_channel.removeItem(roi)
+                # Remove checkbox
+                cb = r_dict["checkbox"]
+                self.box_regions_layout.removeWidget(cb)
+                cb.deleteLater()
+                # Remove from dicts and plot items
+                if r_dict["name"] in self.spectrum_curves:
+                    c = self.spectrum_curves.pop(r_dict["name"])
+                    if c.scene(): c.scene().removeItem(c)
+                    else: self.plot_widget.removeItem(c)
+                
+                if hasattr(self, 'spectrum_curves_smooth') and r_dict["name"] in self.spectrum_curves_smooth:
+                    c = self.spectrum_curves_smooth.pop(r_dict["name"])
+                    if c.scene(): c.scene().removeItem(c)
+                    else: getattr(self, 'plot_widget_smooth', self.plot_widget).removeItem(c)
+                
+                self.spectrum_spatial_rois.pop(i)
+                break
+                
+        # Rename remaining to be contiguous
+        for i, r_dict in enumerate(self.spectrum_spatial_rois):
+            new_name = f"Region {i + 1}"
+            old_name = r_dict["name"]
+            r_dict["name"] = new_name
+            r_dict["checkbox"].setText(new_name)
+            
+            if old_name in self.spectrum_curves:
+                self.spectrum_curves[new_name] = self.spectrum_curves.pop(old_name)
+            if hasattr(self, 'spectrum_curves_smooth') and old_name in self.spectrum_curves_smooth:
+                self.spectrum_curves_smooth[new_name] = self.spectrum_curves_smooth.pop(old_name)
+                
+        if len(self.spectrum_spatial_rois) <= 1:
+            self.box_regions.hide()
+
+        self.refresh_spectral_stats_apertures()
+        self.update_spectrum()
+
     def clear_roi(self):
+        self.combo_roi.blockSignals(True)
         self.combo_roi.setCurrentText("Whole Map")
+        self.combo_roi.blockSignals(False)
+        for r_dict in list(self.spectrum_spatial_rois):
+            self.remove_spatial_spectrum_roi(r_dict["roi"])
+            
         if hasattr(self, 'spatial_rois_to_delete'):
-            self.spatial_rois_to_delete = [item["roi"] for item in self.spatial_rois]
+            self.spatial_rois_to_delete = [item["roi"] for item in getattr(self, 'spatial_rois', [])]
             self.delete_selected_spatial_regions()
 
     def open_edit_region_dialog(self):
-        if self.current_roi is None: return
+        if not getattr(self, 'active_spatial_spectrum_roi', None): return
+        # Mutual exclusion: warn if Smooth dialog is currently open
+        if getattr(self, '_smooth_dialog_active', False):
+            msg = QMessageBox(self.window())
+            msg.setWindowTitle("Dialog Open")
+            msg.setText("Please close the 'Smooth' dialog before opening Edit Region.")
+            msg.setIcon(QMessageBox.Information)
+            msg.setWindowFlags(msg.windowFlags() | Qt.WindowStaysOnTopHint)
+            msg.exec_()
+            return
         from src.gui.dialogs import RegionPropertiesDialog
-        self._region_dialog = RegionPropertiesDialog(self.current_roi, self)
-        self._region_dialog.show()
+        roi_dict = next((r for r in getattr(self, 'spectrum_spatial_rois', []) if r["roi"] == self.active_spatial_spectrum_roi), None)
+        # If an edit dialog is already open for this ROI, just raise it
+        if getattr(self, '_region_dialog', None) and self._region_dialog.isVisible():
+            self._region_dialog.raise_()
+            self._region_dialog.activateWindow()
+            return
+        dlg = RegionPropertiesDialog(self.active_spatial_spectrum_roi, self, parent=self.window(), roi_dict=roi_dict)
+        self._region_dialog = dlg
+        dlg.show()
 
     def update_spectrum(self):
         if self.cube_clean is None: return
         stat = self.combo_spec_stat.currentText()
         
+        active_rois = [r_dict for r_dict in self.spectrum_spatial_rois if r_dict["checkbox"].isChecked()]
+        if not active_rois:
+            rois_to_plot = [{"name": "Whole Map", "roi": None, "color": "w"}]
+        else:
+            rois_to_plot = active_rois
+            
+        active_names = [r["name"] for r in rois_to_plot]
+        for name in list(self.spectrum_curves.keys()):
+            if name not in active_names:
+                c = self.spectrum_curves.pop(name)
+                if c.scene(): c.scene().removeItem(c)
+                else: self.plot_widget.removeItem(c)
+                
+                if hasattr(self, 'spectrum_curves_smooth') and name in self.spectrum_curves_smooth:
+                    c_s = self.spectrum_curves_smooth.pop(name)
+                    if c_s.scene(): c_s.scene().removeItem(c_s)
+                    else: getattr(self, 'plot_widget_smooth', self.plot_widget).removeItem(c_s)
+                    
+        if "Whole Map" not in active_names:
+            self.spectrum_curve.setData([], [])
+            if hasattr(self, 'spectrum_curve_smooth'):
+                self.spectrum_curve_smooth.setData([], [])
+                
+        ymax_global = -np.inf
+        
         with np.errstate(invalid='ignore', divide='ignore'):
-            if self.current_roi is None: 
-                sub_data = self.cube_clean
-            else: 
-                sub_data = self.current_roi.getArrayRegion(self.cube_clean, self.view_channel.getImageItem(), axes=(1, 2))
+            for r_dict in rois_to_plot:
+                roi = r_dict["roi"]
+                name = r_dict["name"]
+                color = r_dict["color"]
                 
-            if "Max" in stat:
-                spec = np.nanmax(sub_data, axis=(1, 2))
-                y_label = f"Max Flux ({self.display_unit})"
-                self.spec_unit = self.display_unit
-            elif "Sum" in stat:
-                spec = np.nansum(sub_data, axis=(1, 2))
-                if self.pixels_per_beam > 1.0:
-                    spec /= self.pixels_per_beam
-                    self.spec_unit = self.display_unit.replace('/beam', '')
+                if roi is None:
+                    sub_data = self.cube_clean
                 else:
-                    self.spec_unit = f"{self.display_unit} * pix"
-                y_label = f"Sum Flux ({self.spec_unit})"
-            else:
-                spec = np.nanmean(sub_data, axis=(1, 2))
-                y_label = f"Mean Flux ({self.display_unit})"
-                self.spec_unit = self.display_unit
+                    sub_data = roi.getArrayRegion(self.cube_clean, self.view_channel.getImageItem(), axes=(1, 2))
+                    
+                if "Max" in stat:
+                    spec = np.nanmax(sub_data, axis=(1, 2))
+                    y_label = f"Max Flux ({self.display_unit})"
+                    self.spec_unit = self.display_unit
+                elif "Sum" in stat:
+                    spec = np.nansum(sub_data, axis=(1, 2))
+                    if self.pixels_per_beam > 1.0:
+                        spec /= self.pixels_per_beam
+                        self.spec_unit = self.display_unit.replace('/beam', '')
+                    else:
+                        self.spec_unit = f"{self.display_unit} * pix"
+                    y_label = f"Sum Flux ({self.spec_unit})"
+                else:
+                    spec = np.nanmean(sub_data, axis=(1, 2))
+                    y_label = f"Mean Flux ({self.display_unit})"
+                    self.spec_unit = self.display_unit
+                    
+                self.plot_widget.setLabel('left', y_label)
+                if hasattr(self, 'plot_widget_smooth'):
+                    self.plot_widget_smooth.setLabel('left', y_label)
                 
-        self.plot_widget.setLabel('left', y_label)
-        
-        sort_idx = np.argsort(self.v_axis)
-        vs, ss = self.v_axis[sort_idx], spec[sort_idx]
-        ve = np.zeros(len(vs) + 1)
-        dv = np.diff(vs)
-        if len(dv) > 0:
-            ve[:-1] = vs - np.append(dv, dv[-1])/2
-            ve[-1] = vs[-1] + dv[-1]/2
-        else: ve = np.array([vs[0]-1, vs[0]+1])
-        self.spectrum_curve.setData(x=ve, y=ss)
-        
-        if getattr(self, 'smoothing_params', None) is not None and getattr(self, 'spectrum_tabs', None) is not None:
-            if self.spectrum_tabs.indexOf(self.plot_widget_smooth) != -1:
-                method = self.smoothing_params['method']
-                ss_smooth = ss.copy()
-                try:
-                    if method == 'boxcar':
-                        from scipy.ndimage import uniform_filter1d
-                        w = self.smoothing_params['window']
-                        ss_smooth = uniform_filter1d(ss_smooth, size=w)
-                    elif method == 'gaussian':
-                        from scipy.ndimage import gaussian_filter1d
-                        sigma = self.smoothing_params['sigma']
-                        ss_smooth = gaussian_filter1d(ss_smooth, sigma=sigma)
-                    elif method == 'savgol':
-                        from scipy.signal import savgol_filter
-                        w = self.smoothing_params['window']
-                        p = self.smoothing_params['polyorder']
-                        if len(ss_smooth) > w:
-                            ss_smooth = savgol_filter(ss_smooth, window_length=w, polyorder=p)
-                except Exception:
-                    pass
-                self.spectrum_curve_smooth.setData(x=ve, y=ss_smooth)
-        
+                sort_idx = np.argsort(self.v_axis)
+                vs, ss = self.v_axis[sort_idx], spec[sort_idx]
+                ve = np.zeros(len(vs) + 1)
+                dv = np.diff(vs)
+                if len(dv) > 0:
+                    ve[:-1] = vs - np.append(dv, dv[-1])/2
+                    ve[-1] = vs[-1] + dv[-1]/2
+                else: ve = np.array([vs[0]-1, vs[0]+1])
+                
+                if ss is not None and len(ss) > 0:
+                    ymax_global = max(ymax_global, np.nanmax(ss))
+                
+                if name == "Whole Map":
+                    self.spectrum_curve.setData(x=ve, y=ss)
+                else:
+                    if name not in self.spectrum_curves:
+                        c = pg.PlotDataItem([], [], stepMode="center", pen=pg.mkPen(color, width=2), name=name)
+                        self.spectrum_curves[name] = c
+                        self.plot_widget.addItem(c)
+                    self.spectrum_curves[name].setData(x=ve, y=ss)
+                    
+                if getattr(self, 'smoothing_params', None) is not None and getattr(self, 'spectrum_tabs', None) is not None:
+                    if self.spectrum_tabs.indexOf(self.plot_widget_smooth) != -1:
+                        method = self.smoothing_params['method']
+                        ss_smooth = ss.copy()
+                        try:
+                            if method == 'boxcar':
+                                from scipy.ndimage import uniform_filter1d
+                                w = self.smoothing_params['window']
+                                ss_smooth = uniform_filter1d(ss_smooth, size=w)
+                            elif method == 'gaussian':
+                                from scipy.ndimage import gaussian_filter1d
+                                sigma = self.smoothing_params['sigma']
+                                ss_smooth = gaussian_filter1d(ss_smooth, sigma=sigma)
+                            elif method == 'savgol':
+                                from scipy.signal import savgol_filter
+                                w = self.smoothing_params['window']
+                                p = self.smoothing_params['polyorder']
+                                if len(ss_smooth) > w:
+                                    ss_smooth = savgol_filter(ss_smooth, window_length=w, polyorder=p)
+                        except Exception:
+                            pass
+                            
+                        if name == "Whole Map":
+                            self.spectrum_curve_smooth.setData(x=ve, y=ss_smooth)
+                        else:
+                            if name not in self.spectrum_curves_smooth:
+                                c_s = pg.PlotDataItem([], [], stepMode="center", pen=pg.mkPen(color, width=2), name=name)
+                                self.spectrum_curves_smooth[name] = c_s
+                                self.plot_widget_smooth.addItem(c_s)
+                            self.spectrum_curves_smooth[name].setData(x=ve, y=ss_smooth)
+
+        # Update legends
+        if getattr(self.plot_widget, 'plotItem', None) is not None and self.plot_widget.plotItem.legend is not None:
+            self.plot_widget.plotItem.legend.clear()
+            if "Whole Map" in active_names:
+                self.plot_widget.plotItem.legend.addItem(self.spectrum_curve, "Whole Map")
+            for n, c in self.spectrum_curves.items():
+                self.plot_widget.plotItem.legend.addItem(c, n)
+                
+        if getattr(self, 'plot_widget_smooth', None) is not None and self.plot_widget_smooth.plotItem.legend is not None:
+            self.plot_widget_smooth.plotItem.legend.clear()
+            if "Whole Map" in active_names:
+                self.plot_widget_smooth.plotItem.legend.addItem(self.spectrum_curve_smooth, "Whole Map")
+            for n, c_s in getattr(self, 'spectrum_curves_smooth', {}).items():
+                self.plot_widget_smooth.plotItem.legend.addItem(c_s, n)
+
         if self.catalog_overlay_items:
-            ymax = np.nanmax(ss) if ss is not None else 1.0
+            ymax = ymax_global if ymax_global != -np.inf else 1.0
             for item in self.catalog_overlay_items:
                 if isinstance(item, pg.TextItem):
                     item.setPos(item.pos().x(), ymax)
@@ -2529,17 +2761,84 @@ class ExplorerTab(QWidget):
                 return
         active_label.setText("")
 
-    def hover_spectrum(self, pos):
+    def hover_spectrum(self, pos, widget=None):
         self.clear_all_hover_labels()
-        if self.cube_clean is None or not self.plot_widget.sceneBoundingRect().contains(pos): return
-        mp = self.plot_widget.plotItem.vb.mapSceneToView(pos)
+        if self.cube_clean is None or self.v_axis is None: return
+        
+        # If widget is not provided, try to find which one contains the mouse
+        if widget is None:
+            if self.plot_widget.sceneBoundingRect().contains(pos):
+                widget = self.plot_widget
+            elif self.plot_widget_smooth.sceneBoundingRect().contains(pos):
+                widget = self.plot_widget_smooth
+            else:
+                return
+        elif not widget.sceneBoundingRect().contains(pos):
+            return
+
+        is_smooth = (widget == self.plot_widget_smooth)
+        mp = widget.plotItem.vb.mapSceneToView(pos)
+        
+        # Find closest velocity index
         idx = (np.abs(self.v_axis - mp.x())).argmin()
-        if hasattr(self.spectrum_curve, 'yData') and self.spectrum_curve.yData is not None:
-            sort_idx = np.argsort(self.v_axis)
-            val = self.spectrum_curve.yData[(np.abs(self.v_axis[sort_idx] - mp.x())).argmin()]
-            val_str = f'{val:.3e}' if (abs(val) < 1e-3 and abs(val)>0) else f'{val:.4g}'
-            self.lbl_hover_spec.setText(f"Ch: {idx} | {self.v_axis[idx]:.2f} km/s | {val_str} {self.spec_unit}")
+        if idx >= len(self.v_axis): return
+        
+        v_val = self.v_axis[idx]
+        
+        # Collect values from all active curves in this plot
+        all_vals = [] # List of (sort_key, display_name, value_str)
+        
+        # Check Whole Map curve
+        main_curve = self.spectrum_curve_smooth if is_smooth else self.spectrum_curve
+        if main_curve.yData is not None and len(main_curve.yData) > idx:
+            if len(main_curve.yData) > 0:
+                y = main_curve.yData[idx]
+                if np.isfinite(y):
+                    val_str = f'{y:.3e}' if (abs(y) < 1e-3 and abs(y) > 0) else f'{y:.4g}'
+                    # Sort key -1 to ensure it's first
+                    all_vals.append((-1, "", val_str))
+        
+        # Check region curves
+        region_curves = getattr(self, 'spectrum_curves_smooth' if is_smooth else 'spectrum_curves', {})
+        for name, c in region_curves.items():
+            if c.yData is not None and len(c.yData) > idx:
+                y = c.yData[idx]
+                if np.isfinite(y):
+                    val_str = f'{y:.3e}' if (abs(y) < 1e-3 and abs(y) > 0) else f'{y:.4g}'
+                    
+                    if name.startswith("Region"):
+                        try:
+                            # Extract number, handling "Region 1" or "Region1"
+                            num_str = name.replace("Region", "").strip()
+                            num = int(num_str)
+                            display = f"R{num}"
+                            sort_key = (1, num) # Group 1 for Regions
+                        except:
+                            display = name[:2].upper()
+                            sort_key = (0, display) # Group 0 for Custom
+                    else:
+                        display = name[:2].upper()
+                        sort_key = (0, display)
+                        
+                    all_vals.append((sort_key, display, val_str))
+        
+        # Sort values based on the key
+        all_vals.sort(key=lambda x: x[0])
+        
+        if all_vals:
+            # Format the strings
+            display_parts = []
+            for _, disp, v_str in all_vals:
+                if disp == "":
+                    display_parts.append(v_str)
+                else:
+                    display_parts.append(f"{disp}: {v_str}")
+            
+            unit = getattr(self, 'spec_unit', '')
+            self.lbl_hover_spec.setText(f"Ch: {idx} | {v_val:.2f} km/s | " + " | ".join(display_parts) + f" {unit}")
             self.lbl_hover_spec.setStyleSheet("color: #3498db; font-weight: bold; font-size: 9.5px;")
+
+
 
     def hover_pv(self, pos):
         self.clear_all_hover_labels()
@@ -2561,19 +2860,11 @@ class ExplorerTab(QWidget):
 
     def update_region_ui_visibility(self):
         active_rois = self.get_active_spectrum_rois()
-        n = len(active_rois)
-        
-        self.lbl_regions.setVisible(n >= 1)
-        self.combo_regions.setVisible(n >= 1)
-        self.lbl_calc.setVisible(n >= 1)
-        self.combo_region_calc.setVisible(n >= 1)
-        self.lbl_region_result.setVisible(n >= 1)
-        
-        self.lbl_plus1.setVisible(n >= 2)
-        self.combo_regions_2.setVisible(n >= 2)
-        
-        self.lbl_plus2.setVisible(n >= 3)
-        self.combo_regions_3.setVisible(n >= 3)
+        has_boxes = len(active_rois) >= 1
+        self.btn_spectral_stats.setVisible(has_boxes)
+        # Also refresh popup if open
+        if self._spectral_stats_popup and self._spectral_stats_popup.isVisible():
+            self.refresh_spectral_stats_popup()
 
     def rename_regions(self):
         self.combo_regions.blockSignals(True)
@@ -2590,7 +2881,7 @@ class ExplorerTab(QWidget):
         
         active_rois = self.get_active_spectrum_rois()
         for i, item in enumerate(active_rois):
-            new_name = f"Region {i + 1}"
+            new_name = f"Box {i + 1}"
             item["name"] = new_name
             item["text_item"].setText(new_name)
             
@@ -2604,8 +2895,10 @@ class ExplorerTab(QWidget):
         self.combo_regions_2.blockSignals(False)
         self.combo_regions_3.blockSignals(False)
         
-        self.on_region_selected() 
-        self.lbl_region_result.setText("---")
+        self.on_region_selected()
+        # Refresh popup box list
+        if self._spectral_stats_popup and self._spectral_stats_popup.isVisible():
+            self.refresh_spectral_stats_popup()
 
     def delete_region(self, roi):
         if roi.scene():
@@ -2648,7 +2941,7 @@ class ExplorerTab(QWidget):
 
     def add_spectrum_region(self, roi):
         active_rois = self.get_active_spectrum_rois()
-        region_name = f"Region {len(active_rois) + 1}"
+        region_name = f"Box {len(active_rois) + 1}"
         roi_info = {"name": region_name, "roi": roi}
         active_rois.append(roi_info)
         
@@ -2680,6 +2973,296 @@ class ExplorerTab(QWidget):
         self.combo_regions.setCurrentText(region_name)
         self.combo_regions.blockSignals(False)
         self.on_region_selected()
+
+    def open_spectral_stats_popup(self):
+        if self._spectral_stats_popup is None or not self._spectral_stats_popup.isVisible():
+
+            main_win = self.window()
+
+            popup = QDialog(main_win)
+            popup.setWindowTitle("Spectral Statistics")
+            popup.setMinimumWidth(480)
+            popup.setWindowFlags(
+                Qt.Window | Qt.WindowCloseButtonHint | Qt.WindowMinimizeButtonHint
+            )
+            popup.setAttribute(Qt.WA_DeleteOnClose, False)
+
+            layout = QVBoxLayout(popup)
+            layout.setSpacing(8)
+            layout.setContentsMargins(10, 10, 10, 10)
+
+            _BTN_STYLE = "font-size: 9px; padding: 1px 6px;"
+
+            # ── Velocity Boxes ────────────────────────────────────────────
+            popup.grp_boxes = QGroupBox("Velocity Boxes (drawn on spectrum)")
+            boxes_outer = QVBoxLayout(popup.grp_boxes)
+            boxes_outer.setSpacing(4)
+            sel_row_b = QHBoxLayout()
+            btn_b_all  = QPushButton("Select All");   btn_b_all.setStyleSheet(_BTN_STYLE);  btn_b_all.setFixedHeight(20)
+            btn_b_none = QPushButton("Deselect All"); btn_b_none.setStyleSheet(_BTN_STYLE); btn_b_none.setFixedHeight(20)
+            sel_row_b.addWidget(btn_b_all); sel_row_b.addWidget(btn_b_none); sel_row_b.addStretch()
+            boxes_outer.addLayout(sel_row_b)
+            popup.boxes_grid = QGridLayout(); popup.boxes_grid.setHorizontalSpacing(8); popup.boxes_grid.setVerticalSpacing(2)
+            boxes_outer.addLayout(popup.boxes_grid)
+
+            def _sel_all_boxes(_, p=popup):
+                for i in range(p.boxes_grid.count()):
+                    w = p.boxes_grid.itemAt(i).widget()
+                    if isinstance(w, QCheckBox): w.setChecked(True)
+            def _sel_none_boxes(_, p=popup):
+                for i in range(p.boxes_grid.count()):
+                    w = p.boxes_grid.itemAt(i).widget()
+                    if isinstance(w, QCheckBox): w.setChecked(False)
+            btn_b_all.clicked.connect(_sel_all_boxes)
+            btn_b_none.clicked.connect(_sel_none_boxes)
+            layout.addWidget(popup.grp_boxes)
+
+            # ── Spatial Aperture Regions ──────────────────────────────────
+            popup.grp_apertures = QGroupBox("Spatial Aperture Regions")
+            ap_outer = QVBoxLayout(popup.grp_apertures)
+            ap_outer.setSpacing(4)
+            sel_row_a = QHBoxLayout()
+            btn_a_all  = QPushButton("Select All");   btn_a_all.setStyleSheet(_BTN_STYLE);  btn_a_all.setFixedHeight(20)
+            btn_a_none = QPushButton("Deselect All"); btn_a_none.setStyleSheet(_BTN_STYLE); btn_a_none.setFixedHeight(20)
+            ap_note = QLabel("(all unchecked = Whole Map)"); ap_note.setStyleSheet("font-style: italic; font-size: 10px;")
+            sel_row_a.addWidget(btn_a_all); sel_row_a.addWidget(btn_a_none); sel_row_a.addWidget(ap_note); sel_row_a.addStretch()
+            ap_outer.addLayout(sel_row_a)
+            popup.apertures_grid = QGridLayout(); popup.apertures_grid.setHorizontalSpacing(8); popup.apertures_grid.setVerticalSpacing(2)
+            ap_outer.addLayout(popup.apertures_grid)
+
+            def _sel_all_ap(_, p=popup):
+                for i in range(p.apertures_grid.count()):
+                    w = p.apertures_grid.itemAt(i).widget()
+                    if isinstance(w, QCheckBox): w.setChecked(True)
+            def _sel_none_ap(_, p=popup):
+                for i in range(p.apertures_grid.count()):
+                    w = p.apertures_grid.itemAt(i).widget()
+                    if isinstance(w, QCheckBox): w.setChecked(False)
+            btn_a_all.clicked.connect(_sel_all_ap)
+            btn_a_none.clicked.connect(_sel_none_ap)
+            layout.addWidget(popup.grp_apertures)
+
+            # ── Statistics to compute (3-column grid) ────────────────────
+            grp_stats = QGroupBox("Statistics to compute")
+            stats_grid = QGridLayout(grp_stats)
+            stats_grid.setHorizontalSpacing(12)
+            _STAT_OPTIONS = [
+                ("Integrated Intensity", False), ("RMS", False),        ("Peak (Max)", False),
+                ("Min", False),                 ("Mean", False),       ("Median", False),
+                ("Std. Deviation", False),      ("SNR (Peak/RMS)", False), ("Sum", False),
+            ]
+            popup.stat_checkboxes = {}
+            for idx, (stat_name, default_on) in enumerate(_STAT_OPTIONS):
+                cb = QCheckBox(stat_name)
+                cb.setChecked(default_on)
+                cb.toggled.connect(lambda checked, p=popup: self._run_spectral_stats_calc(p))
+                stats_grid.addWidget(cb, *divmod(idx, 3))
+                popup.stat_checkboxes[stat_name] = cb
+            layout.addWidget(grp_stats)
+
+            # ── Results (scrollable, dark bg + green text) ───────────────
+            results_group = QGroupBox("Results")
+            results_inner = QVBoxLayout(results_group)
+            results_inner.setContentsMargins(4, 4, 4, 4)
+            scroll = QScrollArea()
+            scroll.setWidgetResizable(True)
+            scroll.setMinimumHeight(90)
+            scroll.setMaximumHeight(200)
+            scroll.setFrameShape(QScrollArea.NoFrame)
+            popup.lbl_result = QLabel("---")
+            popup.lbl_result.setWordWrap(True)
+            popup.lbl_result.setAlignment(Qt.AlignLeft | Qt.AlignTop)
+            popup.lbl_result.setTextFormat(Qt.RichText)
+            popup.lbl_result.setContentsMargins(6, 6, 6, 6)
+            popup.lbl_result.setStyleSheet(
+                "background-color: #0d0d0d; color: #2ecc71; font-weight: bold; font-size: 11px;"
+            )
+            scroll.setWidget(popup.lbl_result)
+            results_inner.addWidget(scroll)
+            layout.addWidget(results_group)
+            # No separate Calculate button — all calculations run live on toggle
+
+            self._spectral_stats_popup = popup
+            self.refresh_spectral_stats_popup()
+            btn_pos = self.btn_spectral_stats.mapToGlobal(self.btn_spectral_stats.rect().topRight())
+            popup.move(btn_pos)
+            popup.show()
+        else:
+            self._spectral_stats_popup.raise_()
+            self._spectral_stats_popup.activateWindow()
+
+
+    def refresh_spectral_stats_popup(self):
+        popup = self._spectral_stats_popup
+        if popup is None: return
+
+        # ── Rebuild boxes (auto-flow into 3 cols) ────────────────────────
+        while popup.boxes_grid.count():
+            item = popup.boxes_grid.takeAt(0)
+            if item.widget(): item.widget().deleteLater()
+        active_rois = self.get_active_spectrum_rois()
+        if not active_rois:
+            popup.boxes_grid.addWidget(QLabel("No boxes drawn yet."), 0, 0)
+        for idx, item in enumerate(active_rois):
+            cb = QCheckBox(item["name"])
+            cb.setChecked(False)
+            cb.toggled.connect(lambda checked, p=popup: self._run_spectral_stats_calc(p))
+            popup.boxes_grid.addWidget(cb, *divmod(idx, 3))
+
+        # ── Rebuild apertures (auto-flow into 3 cols) ────────────────────
+        while popup.apertures_grid.count():
+            it = popup.apertures_grid.takeAt(0)
+            if it.widget(): it.widget().deleteLater()
+        spatial_rois = getattr(self, 'spectrum_spatial_rois', [])
+        if not spatial_rois:
+            popup.apertures_grid.addWidget(QLabel("No spatial regions defined."), 0, 0)
+        for idx, r_dict in enumerate(spatial_rois):
+            cb = QCheckBox(r_dict["name"])
+            cb.setStyleSheet(f"color: {r_dict['color']};")
+            cb.toggled.connect(lambda checked, p=popup: self._run_spectral_stats_calc(p))
+            popup.apertures_grid.addWidget(cb, *divmod(idx, 3))
+
+        popup.adjustSize()
+
+
+    def refresh_spectral_stats_apertures(self):
+        """Called when spatial regions are added/removed to refresh only the apertures section."""
+        if self._spectral_stats_popup and self._spectral_stats_popup.isVisible():
+            self.refresh_spectral_stats_popup()
+
+    def _get_popup_selected_boxes(self, popup):
+        boxes = []
+        active_rois = self.get_active_spectrum_rois()
+        for i in range(popup.boxes_grid.count()):
+            widget = popup.boxes_grid.itemAt(i).widget()
+            if isinstance(widget, QCheckBox) and widget.isChecked():
+                name = widget.text()
+                for item in active_rois:
+                    if item["name"] == name:
+                        boxes.append(item["roi"])
+                        break
+        return boxes
+
+    def _get_popup_selected_apertures(self, popup):
+        """Returns list of r_dict for selected apertures; empty means Whole Map."""
+        selected = []
+        spatial_rois = getattr(self, 'spectrum_spatial_rois', [])
+        for i in range(popup.apertures_grid.count()):
+            widget = popup.apertures_grid.itemAt(i).widget()
+            if isinstance(widget, QCheckBox) and widget.isChecked():
+                name = widget.text()
+                for r_dict in spatial_rois:
+                    if r_dict["name"] == name:
+                        selected.append(r_dict)
+                        break
+        return selected
+
+    def _extract_spectrum_for_stats(self, spatial_roi):
+        """Extract mean spectrum from cube_clean for a given spatial ROI (or whole map if None).
+        Returns (v_axis_sorted, flux_sorted) or (None, None) on failure."""
+        if self.cube_clean is None: return None, None
+        stat = self.combo_spec_stat.currentText()
+        try:
+            if spatial_roi is None:
+                sub_data = self.cube_clean
+            else:
+                sub_data = spatial_roi.getArrayRegion(
+                    self.cube_clean, self.view_channel.getImageItem(), axes=(1, 2))
+            if "Max" in stat:
+                spec = np.nanmax(sub_data, axis=(1, 2))
+            elif "Sum" in stat:
+                spec = np.nansum(sub_data, axis=(1, 2))
+                if self.pixels_per_beam > 1.0:
+                    spec /= self.pixels_per_beam
+            else:
+                spec = np.nanmean(sub_data, axis=(1, 2))
+            sort_idx = np.argsort(self.v_axis)
+            return self.v_axis[sort_idx], spec[sort_idx]
+        except Exception:
+            return None, None
+
+    def _run_spectral_stats_calc(self, popup):
+        selected_rois_1d = self._get_popup_selected_boxes(popup)
+        selected_apertures = self._get_popup_selected_apertures(popup)
+
+        # Determine which spatial apertures to calculate for — completely independent of panel
+        if not selected_apertures:
+            # Whole map
+            apertures_to_calc = [{"name": "Whole Map", "roi": None}]
+        else:
+            apertures_to_calc = [{"name": r["name"], "roi": r["roi"]} for r in selected_apertures]
+
+        if not selected_rois_1d:
+            popup.lbl_result.setText("---")
+            return
+
+        calc_types = [name for name, cb in popup.stat_checkboxes.items() if cb.isChecked()]
+        unit = getattr(self, 'spec_unit', '')
+        results_html = []
+
+
+        for ap in apertures_to_calc:
+            name = ap["name"]
+            # Extract spectrum independently from cube – ignores what the panel shows
+            v_axis, flux = self._extract_spectrum_for_stats(ap["roi"])
+            if v_axis is None or flux is None:
+                results_html.append(f"<b>{name}:</b> Could not extract data")
+                continue
+
+            # Build mask from selected 1D velocity boxes
+            combined_mask = np.zeros_like(v_axis, dtype=bool)
+            for roi in selected_rois_1d:
+                pos = roi.pos(); size = roi.size()
+                min_v, max_v = pos.x(), pos.x() + size.x()
+                if min_v > max_v: min_v, max_v = max_v, min_v
+                combined_mask |= (v_axis >= min_v) & (v_axis <= max_v)
+
+            valid_flux = flux[combined_mask]
+            if len(valid_flux) == 0:
+                results_html.append(f"<b>{name}:</b> No data in selected range")
+                continue
+
+            stats_lines = [f"<b style='color:#89b4fa'>{name}</b>"]
+            dv = abs(v_axis[1] - v_axis[0]) if len(v_axis) > 1 else 1.0
+            valid_v = v_axis[combined_mask]
+
+            for calc in calc_types:
+                calc = calc.strip()
+                if calc == "Integrated Intensity":
+                    val = np.nansum(valid_flux) * dv
+                    stats_lines.append(f"&nbsp;&nbsp;Integrated Intensity: <b>{val:.4f}</b> {unit} km/s")
+                elif calc == "RMS":
+                    val = np.sqrt(np.nanmean(valid_flux**2))
+                    stats_lines.append(f"&nbsp;&nbsp;RMS: <b>{val:.4f}</b> {unit}")
+                elif calc == "Peak (Max)":
+                    val = np.nanmax(valid_flux)
+                    vpeak = valid_v[np.nanargmax(valid_flux)]
+                    stats_lines.append(f"&nbsp;&nbsp;Peak: <b>{val:.4f}</b> {unit} @ {vpeak:.2f} km/s")
+                elif calc == "Min":
+                    val = np.nanmin(valid_flux)
+                    vmin = valid_v[np.nanargmin(valid_flux)]
+                    stats_lines.append(f"&nbsp;&nbsp;Min: <b>{val:.4f}</b> {unit} @ {vmin:.2f} km/s")
+                elif calc == "Mean":
+                    val = np.nanmean(valid_flux)
+                    stats_lines.append(f"&nbsp;&nbsp;Mean: <b>{val:.4f}</b> {unit}")
+                elif calc == "Median":
+                    val = np.nanmedian(valid_flux)
+                    stats_lines.append(f"&nbsp;&nbsp;Median: <b>{val:.4f}</b> {unit}")
+                elif calc == "SNR (Peak/RMS)":
+                    peak = np.nanmax(np.abs(valid_flux))
+                    rms = np.sqrt(np.nanmean(valid_flux**2))
+                    snr = peak / rms if rms > 0 else float('nan')
+                    stats_lines.append(f"&nbsp;&nbsp;SNR: <b>{snr:.2f}</b>")
+                elif calc == "Sum":
+                    val = np.nansum(valid_flux)
+                    stats_lines.append(f"&nbsp;&nbsp;Sum: <b>{val:.4f}</b> {unit}")
+                elif calc == "Std. Deviation":
+                    val = np.nanstd(valid_flux)
+                    stats_lines.append(f"&nbsp;&nbsp;Std. Dev.: <b>{val:.4f}</b> {unit}")
+
+            results_html.append("<br>".join(stats_lines))
+
+        popup.lbl_result.setText("<br><br>".join(results_html) if results_html else "---")
         self.lbl_region_result.setText("---")
 
     def on_region_selected(self, _=None):
@@ -2698,67 +3281,11 @@ class ExplorerTab(QWidget):
                 roi.setPen(pg.mkPen('y', width=3))
             else:
                 roi.setPen(pg.mkPen('c', width=2))
-        self.update_spectrum_region_calc()
+        # Trigger recalculation in popup if open
+        if self._spectral_stats_popup and self._spectral_stats_popup.isVisible():
+            self._run_spectral_stats_calc(self._spectral_stats_popup)
 
     def update_spectrum_region_calc(self, _=None):
-        active_rois = self.get_active_spectrum_rois()
-        active_curve = self.spectrum_curve
-        if self.get_active_spectrum_plot() == getattr(self, 'plot_widget_smooth', None):
-            active_curve = getattr(self, 'spectrum_curve_smooth', self.spectrum_curve)
-
-        if not active_rois or active_curve.yData is None:
-            self.lbl_region_result.setText("---")
-            return
-            
-        selected_names = [
-            self.combo_regions.currentText(),
-            self.combo_regions_2.currentText(),
-            self.combo_regions_3.currentText()
-        ]
-        
-        selected_rois = [item["roi"] for item in active_rois if item["name"] in selected_names and item["name"] != "None"]
-                
-        if not selected_rois:
-            self.lbl_region_result.setText("---")
-            return
-
-        v_axis = active_curve.xData
-        flux = active_curve.yData
-        
-        if v_axis is not None and len(v_axis) == len(flux) + 1:
-            v_axis = (v_axis[:-1] + v_axis[1:]) / 2.0
-            
-        if v_axis is None or flux is None:
-            return
-            
-        combined_mask = np.zeros_like(v_axis, dtype=bool)
-        
-        for roi in selected_rois:
-            pos = roi.pos()
-            size = roi.size()
-            min_v = pos.x()
-            max_v = pos.x() + size.x()
-            
-            if min_v > max_v:
-                min_v, max_v = max_v, min_v
-                
-            combined_mask |= (v_axis >= min_v) & (v_axis <= max_v)
-            
-        valid_flux = flux[combined_mask]
-        
-        if len(valid_flux) == 0:
-            self.lbl_region_result.setText("No data")
-            return
-            
-        calc_type = self.combo_region_calc.currentText()
-        if calc_type == "Integrated intensity":
-            if len(v_axis) > 1:
-                dv = np.abs(v_axis[1] - v_axis[0])
-            else:
-                dv = 1.0
-            result = np.sum(valid_flux) * dv
-            unit = f"{self.spec_unit} km/s"
-            self.lbl_region_result.setText(f"{result:.3f} {unit}")
-        elif calc_type == "RMS":
-            rms = np.sqrt(np.mean(valid_flux**2))
-            self.lbl_region_result.setText(f"{rms:.3f} {self.spec_unit}")
+        """Legacy stub: calculation is now handled by the popup widget."""
+        if self._spectral_stats_popup and self._spectral_stats_popup.isVisible():
+            self._run_spectral_stats_calc(self._spectral_stats_popup)

@@ -9,7 +9,44 @@ from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QKeySequence
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QAction, QTabWidget, 
                              QFileDialog, QMessageBox, QMenu, QDialog, 
-                             QVBoxLayout, QTextEdit)
+                             QVBoxLayout, QHBoxLayout, QTextEdit, QCheckBox, QPushButton, QLabel)
+
+class ExportRegionsDialog(QDialog):
+    def __init__(self, parent, regions_dict, title, is_pdf=False):
+        super().__init__(parent)
+        self.setWindowTitle(title)
+        self.layout = QVBoxLayout(self)
+        
+        self.layout.addWidget(QLabel("Select regions to export:"))
+        
+        self.checkboxes = {}
+        for name, curve in regions_dict.items():
+            cb = QCheckBox(name)
+            cb.setChecked(True)
+            self.checkboxes[name] = cb
+            self.layout.addWidget(cb)
+            
+        self.single_file_cb = None
+        if is_pdf:
+            self.single_file_cb = QCheckBox("Export to single file (overlaid)")
+            self.single_file_cb.setChecked(False)
+            self.layout.addWidget(self.single_file_cb)
+            
+        btn_layout = QHBoxLayout()
+        btn_export = QPushButton("Export")
+        btn_export.clicked.connect(self.accept)
+        btn_cancel = QPushButton("Cancel")
+        btn_cancel.clicked.connect(self.reject)
+        
+        btn_layout.addWidget(btn_export)
+        btn_layout.addWidget(btn_cancel)
+        self.layout.addLayout(btn_layout)
+        
+    def get_selected_regions(self):
+        return [name for name, cb in self.checkboxes.items() if cb.isChecked()]
+        
+    def is_single_file(self):
+        return self.single_file_cb.isChecked() if self.single_file_cb else False
 
 # Import the tab environment we built
 from src.gui.explorer_tab import ExplorerTab, _NUMBA_AVAILABLE
@@ -169,8 +206,12 @@ class KinematicExplorerApp(QMainWindow):
     def keyPressEvent(self, event):
         if event.key() == Qt.Key_Escape:
             tab = self.get_active_tab()
-            if tab and getattr(tab, 'roi_selected', False) and tab.current_roi is not None:
-                tab.clear_roi()
+            if tab and getattr(tab, 'roi_selected', False):
+                if getattr(tab, 'active_spatial_spectrum_roi', None) is not None:
+                    tab.remove_spatial_spectrum_roi(tab.active_spatial_spectrum_roi)
+                    tab.active_spatial_spectrum_roi = None
+                elif getattr(tab, 'current_roi', None) is not None:
+                    tab.clear_roi()
         super().keyPressEvent(event)
 
     def update_menu_states(self):
@@ -252,28 +293,66 @@ class KinematicExplorerApp(QMainWindow):
             self.tabs.setTabText(self.tabs.currentIndex(), "Untitled")
             self.statusBar().showMessage("Cube closed.")
 
-    def _get_active_spectrum_curve(self, tab):
+    def _get_active_spectrum_curves(self, tab):
+        is_smooth = False
         if getattr(tab, 'spectrum_tabs', None) is not None and getattr(tab, 'plot_widget_smooth', None) is not None:
             if tab.spectrum_tabs.currentWidget() == tab.plot_widget_smooth:
-                return getattr(tab, 'spectrum_curve_smooth', tab.spectrum_curve)
-        return tab.spectrum_curve
+                is_smooth = True
+                
+        active_spatial = [r_dict for r_dict in getattr(tab, 'spectrum_spatial_rois', []) if r_dict["checkbox"].isChecked()]
+        active_names = [r["name"] for r in active_spatial]
+        if not active_spatial:
+            active_names = ["Whole Map"]
+            
+        curves = {}
+        for name in active_names:
+            if name == "Whole Map":
+                c = getattr(tab, 'spectrum_curve_smooth', tab.spectrum_curve) if is_smooth else tab.spectrum_curve
+                if c and c.yData is not None:
+                    curves[name] = c
+            else:
+                curves_dict = getattr(tab, 'spectrum_curves_smooth', getattr(tab, 'spectrum_curves', {})) if is_smooth else getattr(tab, 'spectrum_curves', {})
+                if name in curves_dict and curves_dict[name].yData is not None:
+                    curves[name] = curves_dict[name]
+        return curves
 
     def export_spectrum(self):
         tab = self.get_active_tab()
         if tab and tab.cube_clean is not None:
+            curves = self._get_active_spectrum_curves(tab)
+            if not curves:
+                QMessageBox.warning(self, "No Data", "No spectrum data to export.")
+                return
+                
+            regions_to_export = list(curves.keys())
+            if len(curves) > 1:
+                dlg = ExportRegionsDialog(self, curves, "Export Spectra (CSV)")
+                if dlg.exec_() == QDialog.Accepted:
+                    regions_to_export = dlg.get_selected_regions()
+                    if not regions_to_export: return
+                else:
+                    return
+
             options = QFileDialog.Options() | QFileDialog.DontUseNativeDialog
-            file_name, _ = QFileDialog.getSaveFileName(self, "Save Spectrum CSV", "spectrum.csv", "CSV Files (*.csv)", options=options)
-            if file_name:
+            base_filename, _ = QFileDialog.getSaveFileName(self, "Save Spectrum CSV", "spectrum.csv", "CSV Files (*.csv)", options=options)
+            if base_filename:
                 try:
                     sort_idx = np.argsort(tab.v_axis)
                     v_sorted = tab.v_axis[sort_idx]
-                    active_curve = self._get_active_spectrum_curve(tab)
-                    spec_sorted = active_curve.yData 
-                    with open(file_name, mode='w', newline='') as file:
-                        writer = csv.writer(file)
-                        writer.writerow(["Velocity (km/s)", f"Flux ({tab.spec_unit})"])
-                        for v, f in zip(v_sorted, spec_sorted): writer.writerow([v, f])
-                    self.statusBar().showMessage(f"Spectrum saved to {file_name}")
+                    
+                    if base_filename.endswith('.csv'):
+                        base_filename = base_filename[:-4]
+                    
+                    for name in regions_to_export:
+                        curve = curves[name]
+                        spec_sorted = curve.yData
+                        fname = f"{base_filename}_{name.replace(' ', '_')}.csv" if len(regions_to_export) > 1 else f"{base_filename}.csv"
+                        with open(fname, mode='w', newline='') as file:
+                            writer = csv.writer(file)
+                            writer.writerow(["Velocity (km/s)", f"Flux ({tab.spec_unit})"])
+                            for v, f in zip(v_sorted, spec_sorted): writer.writerow([v, f])
+                            
+                    self.statusBar().showMessage("Spectra saved successfully.")
                 except Exception as e:
                     QMessageBox.critical(self, "Error", f"Failed to save file:\n{str(e)}")
         else:
@@ -283,30 +362,47 @@ class KinematicExplorerApp(QMainWindow):
         tab = self.get_active_tab()
         if not tab or tab.cube_clean is None: return
         
+        curves = self._get_active_spectrum_curves(tab)
+        if not curves: return
+        
+        regions_to_export = list(curves.keys())
+        if len(curves) > 1:
+            dlg = ExportRegionsDialog(self, curves, "Export Spectra (FITS)")
+            if dlg.exec_() == QDialog.Accepted:
+                regions_to_export = dlg.get_selected_regions()
+                if not regions_to_export: return
+            else:
+                return
+                
         options = QFileDialog.Options() | QFileDialog.DontUseNativeDialog
-        filename, _ = QFileDialog.getSaveFileName(self, "Save Spectrum FITS", "spectrum.fits", "FITS Files (*.fits)", options=options)
-        if filename:
+        base_filename, _ = QFileDialog.getSaveFileName(self, "Save Spectrum FITS", "spectrum.fits", "FITS Files (*.fits)", options=options)
+        if base_filename:
             try:
                 sort_idx = np.argsort(tab.v_axis)
                 v_sorted = tab.v_axis[sort_idx]
-                active_curve = self._get_active_spectrum_curve(tab)
-                spec_sorted = active_curve.yData 
-                
                 dv = v_sorted[1] - v_sorted[0] if len(v_sorted) > 1 else 1.0
                 
-                hdu = fits.PrimaryHDU(spec_sorted)
-                hdu.header['BUNIT'] = tab.spec_unit
-                hdu.header['CTYPE1'] = 'VRAD'
-                hdu.header['CUNIT1'] = 'km/s'
-                hdu.header['CRPIX1'] = 1
-                hdu.header['CRVAL1'] = v_sorted[0]
-                hdu.header['CDELT1'] = dv
-                
-                if tab.raw_header is not None and 'RESTFRQ' in tab.raw_header:
-                    hdu.header['RESTFRQ'] = tab.raw_header['RESTFRQ']
+                if base_filename.endswith('.fits'):
+                    base_filename = base_filename[:-5]
                     
-                hdu.writeto(filename, overwrite=True)
-                self.statusBar().showMessage(f"Saved Spectrum FITS: {filename}")
+                for name in regions_to_export:
+                    curve = curves[name]
+                    spec_sorted = curve.yData
+                    
+                    hdu = fits.PrimaryHDU(spec_sorted)
+                    hdu.header['BUNIT'] = tab.spec_unit
+                    hdu.header['CTYPE1'] = 'VRAD'
+                    hdu.header['CUNIT1'] = 'km/s'
+                    hdu.header['CRPIX1'] = 1
+                    hdu.header['CRVAL1'] = v_sorted[0]
+                    hdu.header['CDELT1'] = dv
+                    
+                    if tab.raw_header is not None and 'RESTFRQ' in tab.raw_header:
+                        hdu.header['RESTFRQ'] = tab.raw_header['RESTFRQ']
+                        
+                    fname = f"{base_filename}_{name.replace(' ', '_')}.fits" if len(regions_to_export) > 1 else f"{base_filename}.fits"
+                    hdu.writeto(fname, overwrite=True)
+                self.statusBar().showMessage("Saved Spectra FITS successfully.")
             except Exception as e:
                 QMessageBox.critical(self, "Error", f"Failed to save FITS:\n{str(e)}")
 
@@ -314,32 +410,83 @@ class KinematicExplorerApp(QMainWindow):
         tab = self.get_active_tab()
         if not tab or tab.cube_clean is None: return
         
+        curves = self._get_active_spectrum_curves(tab)
+        if not curves: return
+        
+        regions_to_export = list(curves.keys())
+        is_single_file = True
+        if len(curves) > 1:
+            dlg = ExportRegionsDialog(self, curves, "Export Spectra (PDF)", is_pdf=True)
+            if dlg.exec_() == QDialog.Accepted:
+                regions_to_export = dlg.get_selected_regions()
+                is_single_file = dlg.is_single_file()
+                if not regions_to_export: return
+            else:
+                return
+                
         options = QFileDialog.Options() | QFileDialog.DontUseNativeDialog
-        filename, _ = QFileDialog.getSaveFileName(self, "Save Spectrum PDF", "spectrum.pdf", "PDF Files (*.pdf)", options=options)
-        if filename:
+        base_filename, _ = QFileDialog.getSaveFileName(self, "Save Spectrum PDF", "spectrum.pdf", "PDF Files (*.pdf)", options=options)
+        if base_filename:
             try:
                 sort_idx = np.argsort(tab.v_axis)
                 v_sorted = tab.v_axis[sort_idx]
-                active_curve = self._get_active_spectrum_curve(tab)
-                spec_sorted = active_curve.yData 
                 
-                # Standard Matplotlib PDF Export
-                fig, ax = plt.subplots(figsize=(10, 5))
-                
-                ax.step(v_sorted, spec_sorted, color='#3498db', where='mid', linewidth=1.5)
-                ax.set_xlabel('Radio Velocity (km/s)')
-                ax.set_ylabel(f'Flux ({tab.spec_unit})')
-                
-                for item in tab.catalog_overlay_items:
-                    if isinstance(item, pg.InfiniteLine):
-                        ax.axvline(x=item.pos().x(), color='#e74c3c', linestyle='--', linewidth=1)
-                    elif isinstance(item, pg.TextItem):
-                        ax.text(item.pos().x(), np.nanmax(spec_sorted), item.toPlainText(), 
-                                color='#e74c3c', rotation=90, verticalalignment='top', horizontalalignment='right')
-                
-                plt.savefig(filename, format='pdf', bbox_inches='tight')
-                plt.close(fig)
-                self.statusBar().showMessage(f"Saved Spectrum PDF: {filename}")
+                if base_filename.endswith('.pdf'):
+                    base_filename = base_filename[:-4]
+                    
+                color_map = {}
+                if "Whole Map" in curves: color_map["Whole Map"] = '#3498db'
+                for r_dict in getattr(tab, 'spectrum_spatial_rois', []):
+                    color_map[r_dict["name"]] = r_dict["color"]
+                    
+                if is_single_file:
+                    fig, ax = plt.subplots(figsize=(10, 5))
+                    ax.set_xlabel('Radio Velocity (km/s)')
+                    ax.set_ylabel(f'Flux ({tab.spec_unit})')
+                    
+                    for name in regions_to_export:
+                        spec_sorted = curves[name].yData
+                        c = color_map.get(name, '#3498db')
+                        ax.step(v_sorted, spec_sorted, color=c, where='mid', linewidth=1.5, label=name)
+                        
+                    if len(regions_to_export) > 1:
+                        ax.legend()
+                        
+                    for item in tab.catalog_overlay_items:
+                        if isinstance(item, pg.InfiniteLine):
+                            ax.axvline(x=item.pos().x(), color='#e74c3c', linestyle='--', linewidth=1)
+                        elif isinstance(item, pg.TextItem):
+                            ymax = np.nanmax(curves[regions_to_export[0]].yData) if regions_to_export else 1.0
+                            ax.text(item.pos().x(), ymax, item.toPlainText(), 
+                                    color='#e74c3c', rotation=90, verticalalignment='top', horizontalalignment='right')
+                    
+                    fname = f"{base_filename}.pdf" if len(regions_to_export) > 1 else f"{base_filename}.pdf"
+                    plt.savefig(fname, format='pdf', bbox_inches='tight')
+                    plt.close(fig)
+                else:
+                    for name in regions_to_export:
+                        fig, ax = plt.subplots(figsize=(10, 5))
+                        ax.set_xlabel('Radio Velocity (km/s)')
+                        ax.set_ylabel(f'Flux ({tab.spec_unit})')
+                        
+                        spec_sorted = curves[name].yData
+                        c = color_map.get(name, '#3498db')
+                        ax.step(v_sorted, spec_sorted, color=c, where='mid', linewidth=1.5, label=name)
+                        ax.legend()
+                        
+                        for item in tab.catalog_overlay_items:
+                            if isinstance(item, pg.InfiniteLine):
+                                ax.axvline(x=item.pos().x(), color='#e74c3c', linestyle='--', linewidth=1)
+                            elif isinstance(item, pg.TextItem):
+                                ymax = np.nanmax(spec_sorted)
+                                ax.text(item.pos().x(), ymax, item.toPlainText(), 
+                                        color='#e74c3c', rotation=90, verticalalignment='top', horizontalalignment='right')
+                                        
+                        fname = f"{base_filename}_{name.replace(' ', '_')}.pdf"
+                        plt.savefig(fname, format='pdf', bbox_inches='tight')
+                        plt.close(fig)
+                        
+                self.statusBar().showMessage("Saved Spectra PDF successfully.")
             except Exception as e:
                 QMessageBox.critical(self, "Error", f"Failed to save PDF:\n{str(e)}")
 
