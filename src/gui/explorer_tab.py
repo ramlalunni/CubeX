@@ -29,7 +29,7 @@ except ImportError:
 # Import our modularized components
 from src.core.splatalogue import SplatalogueWorker
 from src.gui.custom import JumpSlider, fix_axis_scaling, WCSAxisItem
-from src.gui.dialogs import LineCatalogDialog, LineSelectionDialog, ContourDialog
+from src.gui.dialogs import LineCatalogDialog, LineSelectionDialog, ContourDialog, ChannelGridDialog
 
 # ==============================================================================
 # BILINEAR INTERPOLATION KERNEL (Numba-accelerated when available)
@@ -769,6 +769,14 @@ class ExplorerTab(QWidget):
         self.lbl_spatial_tool.hide()
         self.combo_spatial_tool.hide()
         roi_layout.addStretch()
+        
+        self.btn_grid = QPushButton("▦")
+        self.btn_grid.setToolTip("View channel grid")
+        self.btn_grid.setFixedWidth(30)
+        self.btn_grid.setFixedHeight(22)
+        self.btn_grid.clicked.connect(self.open_channel_grid_popup)
+        roi_layout.addWidget(self.btn_grid)
+        
         channel_layout.addLayout(roi_layout)
 
         top_half.addWidget(self.frame_channel, stretch=4)
@@ -984,6 +992,7 @@ class ExplorerTab(QWidget):
         self.spectrum_rois = []
         self.rois_to_delete = []
         self._spectral_stats_popup = None
+        self._channel_grid_popup = None
         
         spectrum_layout.addLayout(input_layout)
 
@@ -2721,6 +2730,8 @@ class ExplorerTab(QWidget):
         """Called on sigRegionChangeFinished — clears the drag flag and recomputes."""
         self._region_dragging = False
         self.update_moment_maps()
+        if self._channel_grid_popup and self._channel_grid_popup.isVisible():
+            self._channel_grid_popup.update_grid()
 
 
     def update_moment_maps(self):
@@ -3260,6 +3271,15 @@ class ExplorerTab(QWidget):
         else:
             self._spectral_stats_popup.raise_()
             self._spectral_stats_popup.activateWindow()
+
+    def open_channel_grid_popup(self):
+        if self._channel_grid_popup is None:
+            self._channel_grid_popup = ChannelGridDialog(self)
+            
+        self._channel_grid_popup.update_grid()
+        self._channel_grid_popup.show()
+        self._channel_grid_popup.raise_()
+        self._channel_grid_popup.activateWindow()
 
 
     def refresh_spectral_stats_popup(self):

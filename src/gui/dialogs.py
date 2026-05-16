@@ -2,7 +2,10 @@ from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel, 
                              QPushButton, QLineEdit, QComboBox, QDoubleSpinBox, 
                              QRadioButton, QSpinBox, QTableWidget, QTableWidgetItem, 
-                             QHeaderView, QMessageBox, QStackedWidget, QWidget)
+                             QHeaderView, QMessageBox, QStackedWidget, QWidget,
+                             QScrollArea, QGridLayout, QFileDialog)
+import numpy as np
+import matplotlib.pyplot as plt
 
 # ==============================================================================
 # LINE CATALOG DIALOG
@@ -836,3 +839,206 @@ class SpectralSmoothingDialog(QDialog):
                 p = w - 1
             return {"method": "savgol", "window": w, "polyorder": p}
         return None
+
+
+# ==============================================================================
+# CHANNEL GRID DIALOG
+# ==============================================================================
+class ChannelGridDialog(QDialog):
+    """
+    Dialog to display a grid of channel maps corresponding to the selected
+    velocity range in the spectrum panel.
+    """
+    def __init__(self, explorer_tab, parent=None):
+        super().__init__(parent or explorer_tab)
+        self.tab = explorer_tab
+        self.setWindowTitle("Channel Grid")
+        self.setMinimumSize(800, 600)
+        
+        # Set dark theme
+        self.setStyleSheet("background-color: #1a1a1a; color: #e0e0e0;")
+        
+        layout = QHBoxLayout(self)
+        
+        # Left side: Scroll area for grid
+        self.scroll = QScrollArea()
+        self.scroll.setWidgetResizable(True)
+        self.scroll.setStyleSheet("QScrollArea { border: none; }")
+        self.grid_widget = QWidget()
+        self.grid_layout = QGridLayout(self.grid_widget)
+        self.grid_layout.setSpacing(2) # Minimize spacing between tiles
+        self.grid_layout.setContentsMargins(2, 2, 2, 2)
+        self.scroll.setWidget(self.grid_widget)
+        layout.addWidget(self.scroll, stretch=4)
+        
+        # Right side: Colorbar (Histogram) + Export Button
+        right_layout = QVBoxLayout()
+        self.hist = pg.HistogramLUTWidget()
+        right_layout.addWidget(self.hist, stretch=1)
+        
+        self.btn_export = QPushButton("Export to PDF")
+        self.btn_export.clicked.connect(self.export_to_pdf)
+        self.btn_export.setStyleSheet("background-color: #2c3e50; color: white; padding: 5px;")
+        right_layout.addWidget(self.btn_export)
+        
+        layout.addLayout(right_layout, stretch=1)
+        
+        self.images = []
+        
+        # Connect histogram signals to update all images
+        self.hist.sigLevelsChanged.connect(self.on_hist_levels_changed)
+        self.hist.sigLookupTableChanged.connect(self.on_hist_lut_changed)
+        
+        self.update_grid()
+        
+    def update_grid(self):
+        # Clear existing grid
+        while self.grid_layout.count():
+            item = self.grid_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+        self.images.clear()
+        
+        cube, v_axis, minX, maxX = self.tab.get_velocity_subset(use_full_range=False)
+        if cube is None or len(v_axis) == 0:
+            lbl = QLabel("No channels in selected range.")
+            self.grid_layout.addWidget(lbl, 0, 0)
+            return
+            
+        n_channels = len(v_axis)
+        cols = int(np.ceil(np.sqrt(n_channels)))
+        rows = int(np.ceil(n_channels / cols))
+        
+        # Get current histogram state from main channel map
+        main_hist = self.tab.view_channel.ui.histogram
+        levels = main_hist.getLevels()
+        
+        # Update dialog's histogram to match main one
+        self.hist.setLevels(levels[0], levels[1])
+        self.hist.gradient.restoreState(main_hist.gradient.saveState())
+        lut = self.hist.gradient.getLookupTable(256)
+        
+        # Adapt histogram range to be reasonable (slightly larger than levels)
+        margin = (levels[1] - levels[0]) * 0.1
+        self.hist.setHistogramRange(levels[0] - margin, levels[1] + margin)
+        
+        pos_tup = ((self.tab.nx / 2) * self.tab.pix_scale_arcsec, -(self.tab.ny / 2) * self.tab.pix_scale_arcsec)
+        scale_tup = (-self.tab.pix_scale_arcsec, self.tab.pix_scale_arcsec)
+        
+        for idx in range(n_channels):
+            r, c = divmod(idx, cols)
+            
+            pw = pg.PlotWidget(background='#1a1a1a')
+            pw.setAspectLocked(True)
+            pw.invertY(False)
+            pw.invertX(True)
+            
+            # Show axes only on left and bottom edges
+            if c == 0:
+                pw.getAxis('left').show()
+                pw.setLabel('left', 'Dec offset (arcsec)')
+            else:
+                pw.getAxis('left').hide()
+                
+            if idx + cols >= n_channels:
+                pw.getAxis('bottom').show()
+                pw.setLabel('bottom', 'RA offset (arcsec)')
+            else:
+                pw.getAxis('bottom').hide()
+            
+            img = pg.ImageItem()
+            pw.addItem(img)
+            
+            # Set data
+            img.setImage(cube[idx, :, :], scale=scale_tup, pos=pos_tup)
+            img.setLevels(levels)
+            img.setLookupTable(lut)
+            
+            # Add velocity text at top left corner using image coordinates
+            vel_text = pg.TextItem(f"{v_axis[idx]:.2f} km/s", color='w', anchor=(0, 0))
+            vel_text.setParentItem(img)
+            vel_text.setPos(0, self.tab.ny)
+            pw.addItem(vel_text)
+            
+            pw.setFixedSize(150, 150)
+            
+            self.grid_layout.addWidget(pw, r, c)
+            self.images.append(img)
+            
+        # Link the histogram to the first image to make it active
+        if self.images:
+            self.hist.setImageItem(self.images[0])
+            
+    def on_hist_levels_changed(self):
+        levels = self.hist.getLevels()
+        for img in self.images:
+            img.setLevels(levels)
+            
+    def on_hist_lut_changed(self):
+        lut = self.hist.gradient.getLookupTable(256)
+        for img in self.images:
+            img.setLookupTable(lut)
+            
+    def update_from_main_hist(self):
+        main_hist = self.tab.view_channel.ui.histogram
+        levels = main_hist.getLevels()
+        self.hist.setLevels(levels[0], levels[1])
+            
+    def update_from_main_lut(self):
+        main_hist = self.tab.view_channel.ui.histogram
+        self.hist.gradient.restoreState(main_hist.gradient.saveState())
+        
+    def export_to_pdf(self):
+        filename, _ = QFileDialog.getSaveFileName(self, "Save PDF", "channel_grid.pdf", "PDF Files (*.pdf)")
+        if filename:
+            try:
+                cube, v_axis, minX, maxX = self.tab.get_velocity_subset(use_full_range=False)
+                if cube is None or len(v_axis) == 0:
+                    return
+                    
+                n_channels = len(v_axis)
+                cols = int(np.ceil(np.sqrt(n_channels)))
+                rows = int(np.ceil(n_channels / cols))
+                
+                fig, axes = plt.subplots(rows, cols, figsize=(cols*3, rows*3), squeeze=False)
+                
+                levels = self.hist.getLevels()
+                cmap_name = self.tab.parent_window.current_cmap
+                
+                extent = [self.tab.nx/2 * self.tab.pix_scale_arcsec, -self.tab.nx/2 * self.tab.pix_scale_arcsec, 
+                          -self.tab.ny/2 * self.tab.pix_scale_arcsec, self.tab.ny/2 * self.tab.pix_scale_arcsec]
+                          
+                for idx in range(rows * cols):
+                    r = idx // cols
+                    c = idx % cols
+                    ax = axes[r, c]
+                    
+                    if idx < n_channels:
+                        plot_data = cube[idx, :, :].T
+                        
+                        im = ax.imshow(plot_data, origin='lower', cmap=cmap_name, 
+                                       vmin=levels[0], vmax=levels[1], extent=extent)
+                                       
+                        ax.text(0.05, 0.95, f"{v_axis[idx]:.2f} km/s", transform=ax.transAxes,
+                                color='white', verticalalignment='top', bbox=dict(facecolor='black', alpha=0.5, pad=1))
+                                
+                        if c == 0:
+                            ax.set_ylabel('Dec offset (arcsec)')
+                        else:
+                            ax.set_yticklabels([])
+                            
+                        if r == rows - 1 or idx + cols >= n_channels:
+                            ax.set_xlabel('RA offset (arcsec)')
+                        else:
+                            ax.set_xticklabels([])
+                    else:
+                        ax.axis('off')
+                        
+                cbar = fig.colorbar(im, ax=axes.ravel().tolist(), orientation='vertical', shrink=0.8)
+                cbar.set_label(f"Flux ({self.tab.display_unit})")
+                
+                plt.savefig(filename, format='pdf', bbox_inches='tight')
+                plt.close(fig)
+                QMessageBox.information(self, "Success", f"Saved PDF: {filename}")
+            except Exception as e:
+                QMessageBox.critical(self, "Error", f"Failed to save PDF:\\n{str(e)}")
