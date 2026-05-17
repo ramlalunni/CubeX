@@ -400,7 +400,7 @@ class ChannelMapViewBox(pg.ViewBox):
         self.parent_tab = None
 
     def mouseDragEvent(self, ev, axis=None):
-        if ev.modifiers() == Qt.ControlModifier and self.parent_tab:
+        if ((ev.modifiers() == Qt.ControlModifier and ev.isStart()) or self.current_roi is not None) and self.parent_tab:
             mode = self.parent_tab.combo_panel_mode.currentText()
             if mode == "Spatial Analysis":
                 tool = self.parent_tab.combo_spatial_tool.currentText()
@@ -546,7 +546,7 @@ class SpectrumViewBox(pg.ViewBox):
         self.parent_tab = None
 
     def mouseDragEvent(self, ev, axis=None):
-        if ev.modifiers() == Qt.ControlModifier:
+        if (ev.modifiers() == Qt.ControlModifier and ev.isStart()) or self.current_roi is not None:
             if ev.isStart():
                 self.drag_start = self.mapSceneToView(ev.buttonDownScenePos())
                 self.current_roi = pg.ROI([self.drag_start.x(), self.drag_start.y()], [0, 0], pen=pg.mkPen('c', width=2))
