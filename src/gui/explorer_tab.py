@@ -770,7 +770,20 @@ class ExplorerTab(QWidget):
         self.combo_spatial_tool.hide()
         roi_layout.addStretch()
         
-        self.btn_grid = QPushButton("▦")
+        # Draw a reliable square grid icon using QPainter to avoid any font or XPM string issues
+        from PyQt5.QtGui import QIcon, QPixmap, QPainter, QPen, QColor
+        pix = QPixmap(16, 16)
+        pix.fill(Qt.transparent)
+        painter = QPainter(pix)
+        painter.setPen(QPen(QColor(255, 255, 255), 1))
+        painter.drawRect(2, 2, 11, 11)
+        painter.drawLine(6, 2, 6, 13)
+        painter.drawLine(10, 2, 10, 13)
+        painter.drawLine(2, 6, 13, 6)
+        painter.drawLine(2, 10, 13, 10)
+        painter.end()
+        self.btn_grid = QPushButton()
+        self.btn_grid.setIcon(QIcon(pix))
         self.btn_grid.setToolTip("View channel grid")
         self.btn_grid.setFixedWidth(30)
         self.btn_grid.setFixedHeight(22)
@@ -983,7 +996,7 @@ class ExplorerTab(QWidget):
         self.lbl_calc = QLabel("")
 
         # Spectral Statistics popup button
-        self.btn_spectral_stats = QPushButton("📊 Spectral Statistics")
+        self.btn_spectral_stats = QPushButton("Spectral Statistics")
         self.btn_spectral_stats.setToolTip("Open spectral statistics panel for drawn velocity boxes")
         self.btn_spectral_stats.clicked.connect(self.open_spectral_stats_popup)
         self.btn_spectral_stats.hide()
@@ -2931,13 +2944,13 @@ class ExplorerTab(QWidget):
                     coord = self.wcs_2d.pixel_to_world(x_idx, y_idx)
                     ra_str = coord.ra.to_string(unit=u.hourangle, sep=':', precision=2, pad=True)
                     dec_str = coord.dec.to_string(unit=u.degree, sep=':', precision=1, alwayssign=True, pad=True)
-                    coord_text = f"RA: {ra_str}, Dec: {dec_str}"
+                    coord_text = f"RA: {ra_str}, DEC: {dec_str}"
                 else:
                     # Fallback to pixels if WCS fails to load
-                    coord_text = f"Pix: ({x_idx}, {y_idx})"
+                    coord_text = f"({x_idx}, {y_idx})"
                 
                 # Set the final label text (Pixels + Absolute RA/Dec + Value)
-                active_label.setText(f"Pix: ({x_idx}, {y_idx}) | {coord_text} | {val_str} {unit_str}")
+                active_label.setText(f"({x_idx}, {y_idx}) | {coord_text} | {val_str} {unit_str}")
                 active_label.setStyleSheet("color: #3498db; font-weight: bold; font-size: 9.5px;")
                 return
         active_label.setText("")

@@ -25,6 +25,11 @@ CubeX is built on a modern Python scientific stack. We recommend using a virtual
 ### Prerequisites
 Make sure you have Python 3.8+ installed on your system.
 
+**Linux Users (Ubuntu/Debian):** CubeX uses emojis for its user interface icons. To ensure these render correctly, please install the necessary font packages before running the app:
+```bash
+sudo apt install -y fonts-noto-color-emoji
+```
+
 ### 1. Clone the Repository
 ```bash
 git clone [https://github.com/YOUR_USERNAME/CubeX.git](https://github.com/YOUR_USERNAME/CubeX.git)
