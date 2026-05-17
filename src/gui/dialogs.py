@@ -860,30 +860,55 @@ class ChannelGridDialog(QDialog):
         
         layout = QHBoxLayout(self)
         
-        # Left side: Scroll area for grid
+        # Left side: Scroll area + hover label
+        left_layout = QVBoxLayout()
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
         self.scroll.setStyleSheet("QScrollArea { border: none; }")
-        self.grid_widget = QWidget()
-        self.grid_layout = QGridLayout(self.grid_widget)
-        self.grid_layout.setSpacing(2) # Minimize spacing between tiles
-        self.grid_layout.setContentsMargins(2, 2, 2, 2)
+        self.grid_widget = pg.GraphicsLayoutWidget()
+        self.grid_widget.setBackground('#1a1a1a')
         self.scroll.setWidget(self.grid_widget)
-        layout.addWidget(self.scroll, stretch=4)
+        left_layout.addWidget(self.scroll, stretch=1)
+        
+        self.lbl_hover = QLabel("Hover over a tile to see details")
+        self.lbl_hover.setStyleSheet("font-family: monospace; font-size: 11.5px; color: #aaa; padding: 5px;")
+        left_layout.addWidget(self.lbl_hover)
+        
+        layout.addLayout(left_layout, stretch=4)
         
         # Right side: Colorbar (Histogram) + Export Button
         right_layout = QVBoxLayout()
         self.hist = pg.HistogramLUTWidget()
         right_layout.addWidget(self.hist, stretch=1)
         
+        btn_layout = QHBoxLayout()
+        
+        from PyQt5.QtWidgets import QComboBox
+        self.combo_cmap = QComboBox()
+        self.combo_cmap.addItems(['Turbo', 'Inferno', 'Viridis', 'Plasma', 'Magma', 'Cubehelix', 'Grey'])
+        self.combo_cmap.currentTextChanged.connect(self.change_cmap)
+        self.combo_cmap.setStyleSheet("background-color: #34495e; color: white; padding: 5px;")
+        btn_layout.addWidget(self.combo_cmap)
+        
+        self.btn_reset_zoom = QPushButton("Reset zoom")
+        self.btn_reset_zoom.clicked.connect(self.reset_zoom)
+        self.btn_reset_zoom.setStyleSheet("background-color: #34495e; color: white; padding: 5px;")
+        btn_layout.addWidget(self.btn_reset_zoom)
+        
         self.btn_export = QPushButton("Export to PDF")
         self.btn_export.clicked.connect(self.export_to_pdf)
         self.btn_export.setStyleSheet("background-color: #2c3e50; color: white; padding: 5px;")
-        right_layout.addWidget(self.btn_export)
+        btn_layout.addWidget(self.btn_export)
+        
+        right_layout.addLayout(btn_layout)
         
         layout.addLayout(right_layout, stretch=1)
         
         self.images = []
+        self.view_boxes = []
+        self.pos_tup = None
+        self.scale_tup = None
+        self.grid_widget.scene().sigMouseMoved.connect(self.on_mouse_moved)
         
         # Connect histogram signals to update all images
         self.hist.sigLevelsChanged.connect(self.on_hist_levels_changed)
@@ -893,82 +918,156 @@ class ChannelGridDialog(QDialog):
         
     def update_grid(self):
         # Clear existing grid
-        while self.grid_layout.count():
-            item = self.grid_layout.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
+        self.grid_widget.clear()
         self.images.clear()
+        self.view_boxes.clear()
         
         cube, v_axis, minX, maxX = self.tab.get_velocity_subset(use_full_range=False)
         if cube is None or len(v_axis) == 0:
-            lbl = QLabel("No channels in selected range.")
-            self.grid_layout.addWidget(lbl, 0, 0)
+            self.grid_widget.addLabel("No channels in selected range.", col=0, row=0)
             return
             
         n_channels = len(v_axis)
         cols = int(np.ceil(np.sqrt(n_channels)))
         rows = int(np.ceil(n_channels / cols))
         
+        # Set a fixed size. Without axes, grid size matches data aspect ratio exactly. Add 2px for margin.
+        base_w = 200
+        base_h = int(200 * (self.tab.ny / self.tab.nx)) if self.tab.nx > 0 else 200
+        self.grid_widget.setFixedSize(int(cols * base_w) + 2, int(rows * base_h) + 2)
+        
         # Get current histogram state from main channel map
         main_hist = self.tab.view_channel.ui.histogram
         levels = main_hist.getLevels()
         
-        # Update dialog's histogram to match main one
-        self.hist.setLevels(levels[0], levels[1])
+        # Update dialog's histogram gradient to match main one
         self.hist.gradient.restoreState(main_hist.gradient.saveState())
         lut = self.hist.gradient.getLookupTable(256)
         
-        # Adapt histogram range to be reasonable (slightly larger than levels)
-        margin = (levels[1] - levels[0]) * 0.1
-        self.hist.setHistogramRange(levels[0] - margin, levels[1] + margin)
+        # Adapt histogram range to be reasonable (0 to max positive data)
+        cube_max = float(np.nanmax(cube)) if np.nanmax(cube) > 0 else 1.0
+        new_levels = [0, cube_max]
         
         pos_tup = ((self.tab.nx / 2) * self.tab.pix_scale_arcsec, -(self.tab.ny / 2) * self.tab.pix_scale_arcsec)
         scale_tup = (-self.tab.pix_scale_arcsec, self.tab.pix_scale_arcsec)
         
+        self.pos_tup = pos_tup
+        self.scale_tup = scale_tup
+        
+        self.grid_widget.ci.layout.setSpacing(0)
+        self.grid_widget.ci.layout.setContentsMargins(1, 1, 1, 1)
+        
+        first_plot = None
         for idx in range(n_channels):
             r, c = divmod(idx, cols)
             
-            pw = pg.PlotWidget(background='#1a1a1a')
-            pw.setAspectLocked(True)
-            pw.invertY(False)
-            pw.invertX(True)
+            p = self.grid_widget.addPlot(row=r, col=c)
+            p.setAspectLocked(True)
+            p.invertY(False)
+            p.invertX(True)
+            p.hideButtons()
+            p.layout.setContentsMargins(0, 0, 0, 0)
             
-            # Show axes only on left and bottom edges
-            if c == 0:
-                pw.getAxis('left').show()
-                pw.setLabel('left', 'Dec offset (arcsec)')
+            vb = p.getViewBox()
+            vb.setDefaultPadding(0.0)
+            vb.setBorder(pg.mkPen(color='w', width=1))
+            
+            if first_plot is None:
+                first_plot = p
             else:
-                pw.getAxis('left').hide()
+                p.setXLink(first_plot)
+                p.setYLink(first_plot)
                 
-            if idx + cols >= n_channels:
-                pw.getAxis('bottom').show()
-                pw.setLabel('bottom', 'RA offset (arcsec)')
-            else:
-                pw.getAxis('bottom').hide()
+            # Hide all axes
+            p.hideAxis('left')
+            p.hideAxis('bottom')
+            p.hideAxis('right')
+            p.hideAxis('top')
             
             img = pg.ImageItem()
-            pw.addItem(img)
+            p.addItem(img)
             
             # Set data
             img.setImage(cube[idx, :, :], scale=scale_tup, pos=pos_tup)
-            img.setLevels(levels)
+            img.setLevels(new_levels)
             img.setLookupTable(lut)
             
-            # Add velocity text at top left corner using image coordinates
-            vel_text = pg.TextItem(f"{v_axis[idx]:.2f} km/s", color='w', anchor=(0, 0))
-            vel_text.setParentItem(img)
-            vel_text.setPos(0, self.tab.ny)
-            pw.addItem(vel_text)
+            # Add velocity text at top left corner of the ViewBox (screen coordinates)
+            vel_text = pg.TextItem(f"{v_axis[idx]:.2f} km/s", color='w', anchor=(0, 0), fill=pg.mkBrush(0, 0, 0, 150))
+            vel_text.setParentItem(p.getViewBox())
+            vel_text.setPos(5, 5)
+            vel_text.setZValue(100)
             
-            pw.setFixedSize(150, 150)
-            
-            self.grid_layout.addWidget(pw, r, c)
             self.images.append(img)
+            self.view_boxes.append({'vb': vb, 'img': img, 'vel': v_axis[idx], 'data': cube[idx, :, :]})
             
         # Link the histogram to the first image to make it active
         if self.images:
             self.hist.setImageItem(self.images[0])
+            # Set the levels and visible bounds again because setImageItem overrides them
+            self.hist.setLevels(new_levels[0], new_levels[1])
+            self.hist.setHistogramRange(0, cube_max)
             
+            # Sync the colormap with the dropdown selection (which includes fallbacks for non-native ones like cubehelix)
+            self.change_cmap(self.combo_cmap.currentText())
+            
+            # Delay the autoRange reset to ensure layout has fully updated after adding/removing tiles
+            pg.QtCore.QTimer.singleShot(100, self.reset_zoom)
+                
+    def change_cmap(self, cmap_name):
+        cmap_name = cmap_name.lower()
+        try:
+            self.hist.gradient.loadPreset(cmap_name)
+        except KeyError:
+            import matplotlib.pyplot as plt
+            import numpy as np
+            cmap = plt.get_cmap(cmap_name)
+            pos = np.linspace(0.0, 1.0, 64)
+            colors = cmap(pos) * 255
+            self.hist.gradient.setColorMap(pg.ColorMap(pos, colors.astype(np.ubyte)))
+            
+        self.on_hist_lut_changed()
+
+    def reset_zoom(self):
+        if self.view_boxes:
+            vb = self.view_boxes[0]['vb']
+            vb.autoRange(padding=0)
+            
+    def on_mouse_moved(self, pos):
+        if not hasattr(self, 'view_boxes') or not self.view_boxes:
+            return
+            
+        for item in self.view_boxes:
+            vb = item['vb']
+            if vb.sceneBoundingRect().contains(pos):
+                mouse_point = vb.mapSceneToView(pos)
+                x = mouse_point.x()
+                y = mouse_point.y()
+                
+                img = item['img']
+                local_pos = img.mapFromView(mouse_point)
+                px = int(local_pos.x())
+                py = int(local_pos.y())
+                
+                data = item['data']
+                if 0 <= px < data.shape[0] and 0 <= py < data.shape[1]:
+                    val = data[px, py]
+                    # Calculate offsets manually from the local image pixel coordinate to guarantee
+                    # perfectly zeroed centers regardless of ViewBox projection linking
+                    ra_offset = (data.shape[0] / 2.0 - local_pos.x()) * self.tab.pix_scale_arcsec
+                    dec_offset = (local_pos.y() - data.shape[1] / 2.0) * self.tab.pix_scale_arcsec
+                    
+                    self.lbl_hover.setText(f"{item['vel']:.2f} km/s  |  ({px}, {py})  |  RA: {ra_offset:.2f}\"  |  DEC: {dec_offset:.2f}\"  |  {val:.4e} {self.tab.display_unit}")
+                    self.lbl_hover.setStyleSheet("font-family: monospace; font-size: 11.5px; color: #3498db; font-weight: bold; padding: 5px;")
+                else:
+                    self.lbl_hover.setText(f"{item['vel']:.2f} km/s  |  RA: --  |  DEC: --  |  --")
+                    self.lbl_hover.setStyleSheet("font-family: monospace; font-size: 11.5px; color: #aaa; padding: 5px;")
+                return
+                
+        # If we reach here, we are not hovering over any valid tile
+        self.lbl_hover.setText("Hover over a tile to see details")
+        self.lbl_hover.setStyleSheet("font-family: monospace; font-size: 11.5px; color: #aaa; padding: 5px;")
+                
     def on_hist_levels_changed(self):
         levels = self.hist.getLevels()
         for img in self.images:
