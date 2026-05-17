@@ -1122,7 +1122,7 @@ class ChannelGridDialog(QDialog):
                                 color='white', verticalalignment='top', bbox=dict(facecolor='black', alpha=0.5, pad=1))
                                 
                         if c == 0:
-                            ax.set_ylabel('Dec offset (arcsec)')
+                            ax.set_ylabel('DEC offset (arcsec)')
                         else:
                             ax.set_yticklabels([])
                             

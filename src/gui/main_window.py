@@ -587,7 +587,7 @@ class KinematicExplorerApp(QMainWindow):
                                    vmin=levels[0], vmax=levels[1], extent=extent)
                                    
                     ax.set_xlabel('RA offset (arcsec)')
-                    ax.set_ylabel('Dec offset (arcsec)')
+                    ax.set_ylabel('DEC offset (arcsec)')
                     
                     if target_id in tab.contour_params and tab.contour_params[target_id]:
                         params = tab.contour_params[target_id]
