@@ -25,21 +25,17 @@ CubeX is built on a modern Python scientific stack. We recommend using a virtual
 ### Prerequisites
 Make sure you have Python 3.8+ installed on your system.
 
-**Linux Users (Ubuntu/Debian):** CubeX uses emojis for its user interface icons. To ensure these render correctly, please install the necessary font packages before running the app:
-```bash
-sudo apt install -y fonts-noto-color-emoji
-```
-
 ### 1. Clone the Repository
 ```bash
 git clone [https://github.com/YOUR_USERNAME/CubeX.git](https://github.com/YOUR_USERNAME/CubeX.git)
 cd CubeX
 ```
 
-### 2. Install Dependencies
-Install the required packages using the provided `requirements.txt` file:
+### 2. Run the Install Script
+CubeX provides an automated installation script that detects your OS, installs necessary UI fonts (like color emojis for Linux), creates a Python virtual environment, and installs all dependencies automatically.
+
 ```bash
-pip install -r requirements.txt
+./install.sh
 ```
 
 *Core Dependencies: `numpy`, `pandas`, `astropy`, `astroquery`, `spectral-cube`, `matplotlib`, `pyqt5`, `pyqtgraph`*
@@ -48,10 +44,12 @@ pip install -r requirements.txt
 
 ## 🚀 Usage
 
-To launch the application from the source code, simply run:
+If you installed using the `install.sh` script, an executable launcher was automatically created for you. You can launch the application by running:
 ```bash
-python main.py
+./CubeX.sh
 ```
+
+*(Alternatively, you can manually activate your environment and run `python3 main.py`)*
 
 ### Packaging for Linux (Standalone Executable)
 If you want to create a single, double-clickable application file (so you don't need to run it via the terminal or install Python dependencies on other machines), you can build it using PyInstaller:
