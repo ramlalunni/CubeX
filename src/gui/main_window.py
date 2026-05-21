@@ -50,6 +50,7 @@ class ExportRegionsDialog(QDialog):
 
 # Import the tab environment we built
 from src.gui.explorer_tab import ExplorerTab, _NUMBA_AVAILABLE
+from src.gui.dialogs import ContourDialog
 
 # ==============================================================================
 # MAIN WINDOW APP
