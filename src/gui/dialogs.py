@@ -3,7 +3,7 @@ from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel,
                              QPushButton, QLineEdit, QComboBox, QDoubleSpinBox, 
                              QRadioButton, QSpinBox, QTableWidget, QTableWidgetItem, 
                              QHeaderView, QMessageBox, QStackedWidget, QWidget,
-                             QScrollArea, QGridLayout, QFileDialog)
+                             QScrollArea, QGridLayout, QFileDialog, QGroupBox, QCheckBox)
 import numpy as np
 import matplotlib.pyplot as plt
 
@@ -1140,4 +1140,267 @@ class ChannelGridDialog(QDialog):
                 plt.close(fig)
                 QMessageBox.information(self, "Success", f"Saved PDF: {filename}")
             except Exception as e:
-                QMessageBox.critical(self, "Error", f"Failed to save PDF:\\n{str(e)}")
+                QMessageBox.critical(self, "Error", f"Failed to save PDF:\n{str(e)}")
+
+
+class ContourOptionsDialog(QDialog):
+    _LINE_STYLES = {'Solid': Qt.SolidLine, 'Dashed': Qt.DashLine, 'Dotted': Qt.DotLine}
+
+    def __init__(self, parent, current_options=None):
+        super().__init__(parent)
+        self.setWindowTitle("Contour Overlay Options")
+        self.setMinimumWidth(480)
+
+        opts = current_options or {}
+        self.result_options = None
+
+        layout = QVBoxLayout(self)
+
+        mode_group = QGroupBox("Levels Type")
+        mode_layout = QVBoxLayout(mode_group)
+
+        self.rad_rms = QRadioButton("Sigma / RMS List (Recommended)")
+        self.rad_linear = QRadioButton("Linear Range")
+        self.rad_log = QRadioButton("Logarithmic Range")
+        self.rad_pct = QRadioButton("Percentage Levels")
+        mode_layout.addWidget(self.rad_rms)
+        mode_layout.addWidget(self.rad_linear)
+        mode_layout.addWidget(self.rad_log)
+        mode_layout.addWidget(self.rad_pct)
+
+        self.rad_rms.toggled.connect(self._on_mode_changed)
+        self.rad_linear.toggled.connect(self._on_mode_changed)
+        self.rad_log.toggled.connect(self._on_mode_changed)
+        self.rad_pct.toggled.connect(self._on_mode_changed)
+
+        layout.addWidget(mode_group)
+
+        self.stack = QStackedWidget()
+
+        # --- RMS Page ---
+        page_rms = QWidget()
+        rms_layout = QVBoxLayout(page_rms)
+        r1 = QHBoxLayout()
+        r1.addWidget(QLabel("RMS / σ value:"))
+        self.spin_rms = QDoubleSpinBox()
+        self.spin_rms.setRange(1e-12, 1e12)
+        self.spin_rms.setDecimals(6)
+        self.spin_rms.setValue(float(opts.get('rms', 0.001)))
+        r1.addWidget(self.spin_rms)
+        rms_layout.addLayout(r1)
+        r2 = QHBoxLayout()
+        r2.addWidget(QLabel("Multipliers (comma-separated):"))
+        self.edit_mult = QLineEdit()
+        self.edit_mult.setText(opts.get('multipliers_str', '3, 5, 10, 20, 40'))
+        self.edit_mult.setPlaceholderText("e.g., 3, 5, 10, 20, 40")
+        r2.addWidget(self.edit_mult)
+        rms_layout.addLayout(r2)
+        self.stack.addWidget(page_rms)
+
+        # --- Linear Page ---
+        page_lin = QWidget()
+        lin_layout = QVBoxLayout(page_lin)
+        l1 = QHBoxLayout()
+        l1.addWidget(QLabel("Min value:"))
+        self.spin_lin_min = QDoubleSpinBox()
+        self.spin_lin_min.setRange(-1e12, 1e12)
+        self.spin_lin_min.setValue(float(opts.get('lin_min', 0.0)))
+        l1.addWidget(self.spin_lin_min)
+        lin_layout.addLayout(l1)
+        l2 = QHBoxLayout()
+        l2.addWidget(QLabel("Max value:"))
+        self.spin_lin_max = QDoubleSpinBox()
+        self.spin_lin_max.setRange(-1e12, 1e12)
+        self.spin_lin_max.setValue(float(opts.get('lin_max', 10.0)))
+        l2.addWidget(self.spin_lin_max)
+        lin_layout.addLayout(l2)
+        l3 = QHBoxLayout()
+        l3.addWidget(QLabel("Number of levels:"))
+        self.spin_lin_n = QSpinBox()
+        self.spin_lin_n.setRange(1, 200)
+        self.spin_lin_n.setValue(int(opts.get('n_levels', 5)))
+        l3.addWidget(self.spin_lin_n)
+        lin_layout.addLayout(l3)
+        self.stack.addWidget(page_lin)
+
+        # --- Log Page ---
+        page_log = QWidget()
+        log_layout = QVBoxLayout(page_log)
+        g1 = QHBoxLayout()
+        g1.addWidget(QLabel("Min value:"))
+        self.spin_log_min = QDoubleSpinBox()
+        self.spin_log_min.setRange(1e-12, 1e12)
+        self.spin_log_min.setDecimals(6)
+        self.spin_log_min.setValue(float(opts.get('log_min', 0.001)))
+        g1.addWidget(self.spin_log_min)
+        log_layout.addLayout(g1)
+        g2 = QHBoxLayout()
+        g2.addWidget(QLabel("Max value:"))
+        self.spin_log_max = QDoubleSpinBox()
+        self.spin_log_max.setRange(1e-12, 1e12)
+        self.spin_log_max.setDecimals(6)
+        self.spin_log_max.setValue(float(opts.get('log_max', 10.0)))
+        g2.addWidget(self.spin_log_max)
+        log_layout.addLayout(g2)
+        g3 = QHBoxLayout()
+        g3.addWidget(QLabel("Number of levels:"))
+        self.spin_log_n = QSpinBox()
+        self.spin_log_n.setRange(1, 200)
+        self.spin_log_n.setValue(int(opts.get('n_levels', 5)))
+        g3.addWidget(self.spin_log_n)
+        log_layout.addLayout(g3)
+        g4 = QHBoxLayout()
+        g4.addWidget(QLabel("Log base:"))
+        self.spin_log_base = QDoubleSpinBox()
+        self.spin_log_base.setRange(1.1, 1000.0)
+        self.spin_log_base.setValue(float(opts.get('log_base', 10.0)))
+        g4.addWidget(self.spin_log_base)
+        log_layout.addLayout(g4)
+        self.stack.addWidget(page_log)
+
+        # --- Percentage Page ---
+        page_pct = QWidget()
+        pct_layout = QVBoxLayout(page_pct)
+        p1 = QHBoxLayout()
+        p1.addWidget(QLabel("Percentages of peak (comma-separated):"))
+        self.edit_pct = QLineEdit()
+        self.edit_pct.setText(opts.get('percentages_str', '10, 30, 50, 70, 90'))
+        self.edit_pct.setPlaceholderText("e.g., 10, 30, 50, 70, 90")
+        p1.addWidget(self.edit_pct)
+        pct_layout.addLayout(p1)
+        self.stack.addWidget(page_pct)
+
+        layout.addWidget(self.stack)
+
+        style_group = QGroupBox("Visual Styling")
+        style_layout = QGridLayout(style_group)
+
+        style_layout.addWidget(QLabel("Line Color:"), 0, 0)
+        self.combo_color = QComboBox()
+        self.combo_color.addItems(["White", "Black", "Red", "Cyan", "Magenta", "Green"])
+        color = opts.get('color', 'White')
+        idx = self.combo_color.findText(color.capitalize())
+        if idx >= 0:
+            self.combo_color.setCurrentIndex(idx)
+        style_layout.addWidget(self.combo_color, 0, 1)
+
+        style_layout.addWidget(QLabel("Line Width:"), 1, 0)
+        self.spin_lw = QDoubleSpinBox()
+        self.spin_lw.setRange(0.1, 10.0)
+        self.spin_lw.setSingleStep(0.1)
+        self.spin_lw.setValue(float(opts.get('line_width', 1.5)))
+        style_layout.addWidget(self.spin_lw, 1, 1)
+
+        style_layout.addWidget(QLabel("Line Style:"), 2, 0)
+        self.combo_style = QComboBox()
+        self.combo_style.addItems(["Solid", "Dashed", "Dotted"])
+        style_name = opts.get('line_style', 'Solid')
+        idx_s = self.combo_style.findText(style_name.capitalize())
+        if idx_s >= 0:
+            self.combo_style.setCurrentIndex(idx_s)
+        style_layout.addWidget(self.combo_style, 2, 1)
+
+        layout.addWidget(style_group)
+
+        smooth_group = QGroupBox("Data Smoothing")
+        smooth_layout = QVBoxLayout(smooth_group)
+        sh1 = QHBoxLayout()
+        self.chk_smooth = QCheckBox("Apply Gaussian blur to contour data")
+        self.chk_smooth.setChecked(bool(opts.get('smooth', False)))
+        self.chk_smooth.toggled.connect(self._on_smooth_toggled)
+        sh1.addWidget(self.chk_smooth)
+        smooth_layout.addLayout(sh1)
+        sh2 = QHBoxLayout()
+        sh2.addWidget(QLabel("Kernel size (pixels):"))
+        self.spin_kernel = QSpinBox()
+        self.spin_kernel.setRange(1, 7)
+        self.spin_kernel.setSingleStep(2)
+        self.spin_kernel.setValue(int(opts.get('smooth_kernel', 3)))
+        if self.spin_kernel.value() % 2 == 0:
+            self.spin_kernel.setValue(3)
+        sh2.addWidget(self.spin_kernel)
+        sh2.addStretch()
+        smooth_layout.addLayout(sh2)
+        layout.addWidget(smooth_group)
+
+        btn_layout = QHBoxLayout()
+        btn_apply = QPushButton("Apply")
+        btn_apply.setStyleSheet("background-color: #27ae60; font-weight: bold; color: white;")
+        self.btn_clear_overlay = QPushButton("Clear Overlay")
+        self.btn_clear_overlay.setStyleSheet("background-color: #c0392b; color: white;")
+        btn_cancel = QPushButton("Cancel")
+
+        btn_apply.clicked.connect(self._apply)
+        self.btn_clear_overlay.clicked.connect(lambda: self._finish('clear'))
+        btn_cancel.clicked.connect(self.reject)
+
+        btn_layout.addWidget(btn_apply)
+        btn_layout.addWidget(self.btn_clear_overlay)
+        btn_layout.addWidget(btn_cancel)
+        layout.addLayout(btn_layout)
+
+        mode = opts.get('mode', 'rms')
+        if mode == 'linear':
+            self.rad_linear.setChecked(True)
+        elif mode == 'log':
+            self.rad_log.setChecked(True)
+        elif mode == 'percent':
+            self.rad_pct.setChecked(True)
+        else:
+            self.rad_rms.setChecked(True)
+
+        self._on_mode_changed()
+        self._on_smooth_toggled()
+
+    def _on_mode_changed(self):
+        if self.rad_rms.isChecked():
+            self.stack.setCurrentIndex(0)
+        elif self.rad_linear.isChecked():
+            self.stack.setCurrentIndex(1)
+        elif self.rad_log.isChecked():
+            self.stack.setCurrentIndex(2)
+        elif self.rad_pct.isChecked():
+            self.stack.setCurrentIndex(3)
+
+    def _on_smooth_toggled(self):
+        self.spin_kernel.setEnabled(self.chk_smooth.isChecked())
+
+    def _apply(self):
+        self._finish('apply')
+
+    def _finish(self, action):
+        self.action = action
+        if action == 'clear':
+            self.accept()
+            return
+
+        opts = {}
+        if self.rad_rms.isChecked():
+            opts['mode'] = 'rms'
+        elif self.rad_linear.isChecked():
+            opts['mode'] = 'linear'
+        elif self.rad_log.isChecked():
+            opts['mode'] = 'log'
+        elif self.rad_pct.isChecked():
+            opts['mode'] = 'percent'
+
+        opts['rms'] = self.spin_rms.value()
+        opts['multipliers_str'] = self.edit_mult.text()
+        opts['lin_min'] = self.spin_lin_min.value()
+        opts['lin_max'] = self.spin_lin_max.value()
+        opts['n_levels'] = (self.spin_lin_n.value() if opts['mode'] == 'linear'
+                            else self.spin_log_n.value() if opts['mode'] == 'log'
+                            else 5)
+        opts['log_min'] = self.spin_log_min.value()
+        opts['log_max'] = self.spin_log_max.value()
+        opts['log_base'] = self.spin_log_base.value()
+        opts['percentages_str'] = self.edit_pct.text()
+
+        opts['color'] = self.combo_color.currentText().lower()
+        opts['line_width'] = self.spin_lw.value()
+        opts['line_style'] = self.combo_style.currentText().lower()
+        opts['smooth'] = self.chk_smooth.isChecked()
+        opts['smooth_kernel'] = self.spin_kernel.value()
+
+        self.result_options = opts
+        self.accept()

@@ -89,6 +89,12 @@ class KinematicExplorerApp(QMainWindow):
 
         file_menu.addSeparator()
 
+        action_overlay = QAction('Overlay Image (Contours)...', self)
+        action_overlay.triggered.connect(self.load_overlay_file)
+        file_menu.addAction(action_overlay)
+
+        file_menu.addSeparator()
+
         action_new_tab = QAction('New Tab', self)
         action_new_tab.triggered.connect(self.add_new_tab)
         file_menu.addAction(action_new_tab)
@@ -286,6 +292,20 @@ class KinematicExplorerApp(QMainWindow):
                 self.statusBar().showMessage("File loaded successfully.")
             else:
                 self.statusBar().showMessage("Load failed.")
+
+    def load_overlay_file(self):
+        tab = self.get_active_tab()
+        if not tab or tab.cube_clean is None:
+            QMessageBox.warning(self, "No Data", "Please load a primary cube first.")
+            return
+
+        options = QFileDialog.Options() | QFileDialog.DontUseNativeDialog
+        file_name, _ = QFileDialog.getOpenFileName(self, "Open Contour Overlay FITS", "",
+                                                     "FITS (*.fits *.fits.gz);;All (*)", options=options)
+        if file_name:
+            self.statusBar().showMessage(f"Loading overlay: {file_name.split('/')[-1]}...")
+            QApplication.processEvents()
+            tab.load_overlay_file(file_name)
 
     def close_cube(self):
         tab = self.get_active_tab()

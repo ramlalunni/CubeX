@@ -29,7 +29,7 @@ except ImportError:
 # Import our modularized components
 from src.core.splatalogue import SplatalogueWorker
 from src.gui.custom import JumpSlider, fix_axis_scaling, WCSAxisItem
-from src.gui.dialogs import LineCatalogDialog, LineSelectionDialog, ContourDialog, ChannelGridDialog
+from src.gui.dialogs import LineCatalogDialog, LineSelectionDialog, ContourDialog, ChannelGridDialog, ContourOptionsDialog
 
 # ==============================================================================
 # BILINEAR INTERPOLATION KERNEL (Numba-accelerated when available)
@@ -657,6 +657,34 @@ class ExplorerTab(QWidget):
         self.last_clicked_panel_id = 'channel' 
         self.contour_params = {'channel': None, 0: None, 1: None, 2: None}
         self.active_contours = {'channel': [], 0: [], 1: [], 2: []}
+
+        self.contour_overlay_file = None
+        self.contour_overlay_cube = None
+        self.contour_overlay_wcs = None
+        self.contour_overlay_v_axis = None
+        self.contour_overlay_is_static = False
+        self.contour_overlay_2d = None
+        self.contour_overlay_nx = 0
+        self.contour_overlay_ny = 0
+        self.contour_overlay_pix_scale = 1.0
+        self.contour_overlay_iso_items = []
+        self.contour_options = {
+            'mode': 'rms',
+            'rms': 0.001,
+            'multipliers_str': '3, 5, 10, 20, 40',
+            'lin_min': 0.0,
+            'lin_max': 10.0,
+            'n_levels': 5,
+            'log_min': 0.001,
+            'log_max': 10.0,
+            'log_base': 10.0,
+            'percentages_str': '10, 30, 50, 70, 90',
+            'color': 'white',
+            'line_width': 1.5,
+            'line_style': 'solid',
+            'smooth': False,
+            'smooth_kernel': 3,
+        }
         
         self.playback_timer = QTimer()
         self.playback_timer.timeout.connect(self.step_channel)
@@ -782,6 +810,15 @@ class ExplorerTab(QWidget):
         painter.drawLine(2, 6, 13, 6)
         painter.drawLine(2, 10, 13, 10)
         painter.end()
+        self.btn_contour_overlay = QPushButton("Contour Options")
+        self.btn_contour_overlay.setToolTip("Configure contour overlay from external FITS file")
+        self.btn_contour_overlay.setFixedHeight(22)
+        self.btn_contour_overlay.setStyleSheet("font-size: 11px; padding: 0px 6px;")
+        self.btn_contour_overlay.clicked.connect(self.open_contour_options)
+        self.btn_contour_overlay.setEnabled(False)
+        self.btn_contour_overlay.hide()
+        roi_layout.addWidget(self.btn_contour_overlay)
+
         self.btn_grid = QPushButton()
         self.btn_grid.setIcon(QIcon(pix))
         self.btn_grid.setToolTip("View channel grid")
@@ -2196,6 +2233,32 @@ class ExplorerTab(QWidget):
             for iso in self.active_contours[k]: iso.setParentItem(None)
             self.active_contours[k] = []
         self.clear_catalog_lines()
+        self._clear_overlay_contours()
+        self.contour_overlay_file = None
+        self.contour_overlay_cube = None
+        self.contour_overlay_wcs = None
+        self.contour_overlay_v_axis = None
+        self.contour_overlay_is_static = False
+        self.contour_overlay_2d = None
+        self.btn_contour_overlay.setEnabled(False)
+        self.btn_contour_overlay.hide()
+        self.contour_options = {
+            'mode': 'rms',
+            'rms': 0.001,
+            'multipliers_str': '3, 5, 10, 20, 40',
+            'lin_min': 0.0,
+            'lin_max': 10.0,
+            'n_levels': 5,
+            'log_min': 0.001,
+            'log_max': 10.0,
+            'log_base': 10.0,
+            'percentages_str': '10, 30, 50, 70, 90',
+            'color': 'white',
+            'line_width': 1.5,
+            'line_style': 'solid',
+            'smooth': False,
+            'smooth_kernel': 3,
+        }
         self.parent_window.update_menu_states()
 
     # --- DYNAMIC LINE CATALOG ENGINE ---
@@ -2287,6 +2350,331 @@ class ExplorerTab(QWidget):
             self.plot_widget.removeItem(item)
         self.catalog_overlay_items = []
 
+    def load_overlay_file(self, file_name):
+        try:
+            overlay_cube = None
+            overlay_header = None
+            overlay_v = None
+            is_static = False
+            static_2d = None
+            is_2d_image = False
+
+            try:
+                sc = SpectralCube.read(file_name).with_spectral_unit(u.km / u.s, velocity_convention='radio')
+                overlay_cube = sc.filled_data[:].value
+                overlay_cube = np.transpose(overlay_cube, (0, 2, 1))
+                overlay_header = sc.header
+            except (ValueError, Exception):
+                hdul = fits.open(file_name)
+                data_2d = hdul[0].data
+                if data_2d is None or data_2d.ndim < 2:
+                    hdul.close()
+                    QMessageBox.critical(self, "Format Error",
+                        "The selected FITS file does not contain 2D or 3D image data.")
+                    return False
+                if data_2d.ndim == 2:
+                    is_2d_image = True
+                    overlay_cube = np.transpose(data_2d, (1, 0))[np.newaxis, :, :]
+                    overlay_header = hdul[0].header
+                    is_static = True
+                    static_2d = overlay_cube[0]
+                elif data_2d.ndim == 3:
+                    overlay_cube = np.transpose(data_2d, (0, 2, 1))
+                    overlay_header = hdul[0].header
+                    nv_o = overlay_cube.shape[0]
+                    if nv_o == 1:
+                        is_static = True
+                        static_2d = overlay_cube[0]
+                    else:
+                        is_static = True
+                        static_2d = overlay_cube[0]
+                        QMessageBox.information(self, "Spectral Axis Missing",
+                            "This FITS file has multiple channels but no spectral axis "
+                            "information. Using the first channel as a static 2D overlay.")
+                else:
+                    hdul.close()
+                    QMessageBox.critical(self, "Format Error",
+                        "Unexpected data dimensions. Expected 2D or 3D.")
+                    return False
+                hdul.close()
+
+            try:
+                overlay_wcs = WCS(overlay_header).celestial
+            except Exception:
+                QMessageBox.critical(self, "WCS Error",
+                    "The selected FITS file does not contain valid spatial WCS information.")
+                return False
+
+            primary_wcs = self.wcs_2d
+            if primary_wcs is None:
+                QMessageBox.critical(self, "WCS Error",
+                    "The primary cube has no valid WCS. Please reload it.")
+                return False
+
+            nv_o = overlay_cube.shape[0]
+            ny_o = overlay_cube.shape[1]
+            nx_o = overlay_cube.shape[2]
+
+            if nv_o == 1:
+                is_static = True
+                static_2d = overlay_cube[0]
+            elif not is_2d_image and not is_static:
+                try:
+                    overlay_v = sc.spectral_axis.value
+                except Exception:
+                    pass
+                if overlay_v is None and nv_o > 1:
+                    is_static = True
+                    static_2d = overlay_cube[0]
+
+            cdelt2_o = overlay_header.get('CDELT2', None)
+            pix_scale_o = abs(float(cdelt2_o)) * 3600.0 if cdelt2_o else 1.0
+
+            corners_px = np.array([[0, 0], [self.nx - 1, 0], [0, self.ny - 1], [self.nx - 1, self.ny - 1]], dtype=float)
+            ra_primary, dec_primary = primary_wcs.wcs_pix2world(corners_px, 0).T
+            ra_min_p, ra_max_p = ra_primary.min(), ra_primary.max()
+            dec_min_p, dec_max_p = dec_primary.min(), dec_primary.max()
+
+            corners_o_px = np.array([[0, 0], [nx_o - 1, 0], [0, ny_o - 1], [nx_o - 1, ny_o - 1]], dtype=float)
+            ra_overlay, dec_overlay = overlay_wcs.wcs_pix2world(corners_o_px, 0).T
+            ra_min_o, ra_max_o = ra_overlay.min(), ra_overlay.max()
+            dec_min_o, dec_max_o = dec_overlay.min(), dec_overlay.max()
+
+            ra_overlap = (ra_min_p <= ra_max_o and ra_max_p >= ra_min_o)
+            dec_overlap = (dec_min_p <= dec_max_o and dec_max_p >= dec_min_o)
+            if not ra_overlap or not dec_overlap:
+                QMessageBox.critical(self, "No Overlap",
+                    "No spatial overlap between the two cubes.\n"
+                    "The contour file covers a different region of the sky.")
+                return False
+
+            if not is_static and overlay_v is not None:
+                v_min_p, v_max_p = np.nanmin(self.v_axis), np.nanmax(self.v_axis)
+                v_min_o, v_max_o = np.nanmin(overlay_v), np.nanmax(overlay_v)
+                if v_max_p < v_min_o or v_max_o < v_min_p:
+                    QMessageBox.critical(self, "No Overlap",
+                        "No spectral overlap between the two cubes.\n"
+                        "The contour cube covers a different velocity range.")
+                    return False
+
+            self.contour_overlay_file = file_name
+            self.contour_overlay_cube = overlay_cube
+            self.contour_overlay_wcs = overlay_wcs
+            self.contour_overlay_v_axis = overlay_v
+            self.contour_overlay_is_static = is_static
+            self.contour_overlay_2d = static_2d
+            self.contour_overlay_nx = nx_o
+            self.contour_overlay_ny = ny_o
+            self.contour_overlay_pix_scale = pix_scale_o
+
+            self._update_contour_options_rms()
+            self.btn_contour_overlay.setEnabled(True)
+            self.btn_contour_overlay.show()
+            self.update_channel_map()
+
+            v_info = "static (single-channel / 2D)" if is_static else f"{nv_o} channels"
+            self.parent_window.statusBar().showMessage(
+                f"Contour overlay loaded: {file_name.split('/')[-1]} ({v_info})")
+            return True
+
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to load overlay file:\n{str(e)}")
+            return False
+
+    def _update_contour_options_rms(self):
+        slice_data = self._get_overlay_slice_for_current_channel()
+        if slice_data is None:
+            return
+        valid = slice_data[np.isfinite(slice_data)]
+        if len(valid) > 1:
+            rms = float(np.std(valid))
+            if rms > 0:
+                self.contour_options['rms'] = rms
+                self.contour_options['lin_min'] = rms * 3
+                self.contour_options['lin_max'] = rms * 40
+                self.contour_options['log_min'] = max(rms, 1e-12)
+                peak = float(np.nanmax(np.abs(valid)))
+                self.contour_options['log_max'] = max(peak, rms * 10)
+        self.contour_options['multipliers_str'] = '3, 5, 10, 20, 40'
+
+    def _get_overlay_slice_for_current_channel(self):
+        if self.contour_overlay_cube is None:
+            return None
+        if self.contour_overlay_is_static:
+            return self.contour_overlay_2d
+
+        idx = self.slider_channel.value()
+        if self.v_axis is None or idx >= len(self.v_axis):
+            return None
+        target_v = self.v_axis[idx]
+
+        overlay_v = self.contour_overlay_v_axis
+        if overlay_v is None:
+            return None
+
+        if target_v < np.nanmin(overlay_v) or target_v > np.nanmax(overlay_v):
+            return None
+
+        nearest_idx = int(np.argmin(np.abs(overlay_v - target_v)))
+        if nearest_idx < 0 or nearest_idx >= self.contour_overlay_cube.shape[0]:
+            return None
+        return self.contour_overlay_cube[nearest_idx]
+
+    def _reproject_overlay_slice(self, overlay_slice):
+        primary_wcs = self.wcs_2d
+        overlay_wcs = self.contour_overlay_wcs
+        if primary_wcs is None or overlay_wcs is None or overlay_slice is None:
+            return None
+
+        px = np.arange(self.nx, dtype=float)
+        py = np.arange(self.ny, dtype=float)
+        PX, PY = np.meshgrid(px, py, indexing='ij')
+        pts_pix = np.column_stack([PX.ravel(), PY.ravel()])
+
+        ra_arr, dec_arr = primary_wcs.wcs_pix2world(pts_pix, 0).T
+        ox, oy = overlay_wcs.wcs_world2pix(np.column_stack([ra_arr, dec_arr]), 0).T
+
+        ox = ox.reshape(self.nx, self.ny)
+        oy = oy.reshape(self.nx, self.ny)
+
+        result = np.full((self.nx, self.ny), np.nan, dtype=np.float64)
+        valid = (ox >= 0) & (ox < self.contour_overlay_nx - 1) & (oy >= 0) & (oy < self.contour_overlay_ny - 1)
+        if not np.any(valid):
+            return result
+
+        vx = ox[valid]
+        vy = oy[valid]
+        x0 = np.floor(vx).astype(np.int64)
+        y0 = np.floor(vy).astype(np.int64)
+        x1 = np.clip(x0 + 1, 0, self.contour_overlay_nx - 1).astype(np.int64)
+        y1 = np.clip(y0 + 1, 0, self.contour_overlay_ny - 1).astype(np.int64)
+        fx = vx - x0.astype(float)
+        fy = vy - y0.astype(float)
+
+        vals = ((1.0 - fx) * (1.0 - fy) * overlay_slice[x0, y0]
+                + fx * (1.0 - fy) * overlay_slice[x1, y0]
+                + (1.0 - fx) * fy * overlay_slice[x0, y1]
+                + fx * fy * overlay_slice[x1, y1])
+        result[valid] = vals
+        return result
+
+    def _compute_contour_levels(self, data):
+        if data is None:
+            return []
+        valid = data[np.isfinite(data)]
+        if len(valid) == 0:
+            return []
+        opts = self.contour_options
+        mode = opts.get('mode', 'rms')
+
+        if mode == 'rms':
+            rms = opts.get('rms', 0.001)
+            mean_val = float(np.nanmean(valid))
+            try:
+                mults = [float(x.strip()) for x in opts.get('multipliers_str', '3,5,10,20,40').split(',') if x.strip()]
+            except ValueError:
+                mults = [3, 5, 10, 20]
+            levels = [mean_val + m * rms for m in mults]
+        elif mode == 'linear':
+            lo = opts.get('lin_min', float(np.nanmin(valid)))
+            hi = opts.get('lin_max', float(np.nanmax(valid)))
+            n = max(int(opts.get('n_levels', 5)), 1)
+            levels = np.linspace(lo, hi, n).tolist()
+        elif mode == 'log':
+            lo = max(opts.get('log_min', 0.001), 1e-12)
+            hi = max(opts.get('log_max', 10.0), lo * 1.01)
+            n = max(int(opts.get('n_levels', 5)), 1)
+            base = opts.get('log_base', 10.0)
+            log_lo = np.log(lo) / np.log(base)
+            log_hi = np.log(hi) / np.log(base)
+            levels = np.logspace(log_lo, log_hi, n, base=base).tolist()
+        elif mode == 'percent':
+            peak = float(np.nanmax(valid))
+            try:
+                pcts = [float(x.strip()) for x in opts.get('percentages_str', '10,30,50,70,90').split(',') if x.strip()]
+            except ValueError:
+                pcts = [10, 30, 50, 70, 90]
+            levels = [peak * p / 100.0 for p in pcts]
+        else:
+            levels = []
+
+        return sorted([float(lv) for lv in levels if np.isfinite(lv)])
+
+    def _clear_overlay_contours(self):
+        for iso in self.contour_overlay_iso_items:
+            iso.setParentItem(None)
+            if iso.scene() is not None:
+                self.view_channel.getView().removeItem(iso)
+        self.contour_overlay_iso_items = []
+
+    def draw_overlay_contours(self):
+        self._clear_overlay_contours()
+        if self.contour_overlay_cube is None or self.cube_clean is None:
+            return
+
+        overlay_slice = self._get_overlay_slice_for_current_channel()
+        if overlay_slice is None:
+            return
+
+        reprojected = self._reproject_overlay_slice(overlay_slice)
+        if reprojected is None:
+            return
+
+        if self.contour_options.get('smooth', False):
+            k = int(self.contour_options.get('smooth_kernel', 3))
+            if k % 2 == 0:
+                k += 1
+            if k >= 3:
+                from scipy.ndimage import gaussian_filter
+                mask = np.isfinite(reprojected)
+                smooth_data = np.where(mask, reprojected, 0.0)
+                smooth_data = gaussian_filter(smooth_data, sigma=k / 3.0)
+                smooth_data[~mask] = np.nan
+                reprojected = smooth_data
+
+        levels = self._compute_contour_levels(reprojected)
+        if not levels:
+            return
+
+        color = self.contour_options.get('color', 'white')
+        lw = self.contour_options.get('line_width', 1.5)
+        style_str = self.contour_options.get('line_style', 'solid')
+
+        style_map = {'solid': Qt.SolidLine, 'dashed': Qt.DashLine, 'dotted': Qt.DotLine}
+        pen_style = style_map.get(style_str, Qt.SolidLine)
+
+        for lvl in levels:
+            iso = pg.IsocurveItem(data=reprojected, level=lvl, pen=pg.mkPen(color, width=lw, style=pen_style))
+            iso.setParentItem(self.view_channel.getImageItem())
+            iso.setZValue(10)
+            self.contour_overlay_iso_items.append(iso)
+
+    def close_overlay(self):
+        self._clear_overlay_contours()
+        self.contour_overlay_file = None
+        self.contour_overlay_cube = None
+        self.contour_overlay_wcs = None
+        self.contour_overlay_v_axis = None
+        self.contour_overlay_is_static = False
+        self.contour_overlay_2d = None
+        self.btn_contour_overlay.setEnabled(False)
+        self.btn_contour_overlay.hide()
+        self.parent_window.statusBar().showMessage("Contour overlay removed.")
+        self.update_channel_map()
+
+    def open_contour_options(self):
+        if self.contour_overlay_cube is None:
+            QMessageBox.warning(self, "No Overlay", "Please load a contour overlay file first.")
+            return
+
+        dlg = ContourOptionsDialog(self, self.contour_options)
+        if dlg.exec_():
+            if dlg.action == 'clear':
+                self.close_overlay()
+            elif dlg.action == 'apply' and dlg.result_options:
+                self.contour_options = dlg.result_options
+                self.draw_overlay_contours()
+
     # ==================== MAP & ROI FUNCTIONS ====================
     def draw_contours(self, target_id, view, data):
         for iso in self.active_contours.get(target_id, []):
@@ -2324,6 +2712,7 @@ class ExplorerTab(QWidget):
         slice_data = self.cube_clean[idx]
         self.view_channel.setImage(slice_data, autoLevels=False, levels=getattr(self, 'ch_levels', (0, 1)), autoHistogramRange=True, scale=scale_tup, pos=pos_tup)
         self.draw_contours('channel', self.view_channel, slice_data)
+        self.draw_overlay_contours()
         self.update_spatial_analysis()
         
         grad = self.view_channel.ui.histogram.gradient
