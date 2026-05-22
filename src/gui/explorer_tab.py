@@ -658,6 +658,9 @@ class ExplorerTab(QWidget):
         self.contour_params = {'channel': None, 0: None, 1: None, 2: None}
         self.active_contours = {'channel': [], 0: [], 1: [], 2: []}
 
+        self.contour_overlays = []
+        self.overlay_color_palette = ['cyan', 'magenta', 'yellow', 'lime', 'orange', 'pink', 'aquamarine', 'gold', 'salmon', 'skyblue']
+
         self.contour_overlay_file = None
         self.contour_overlay_cube = None
         self.contour_overlay_wcs = None
@@ -668,6 +671,7 @@ class ExplorerTab(QWidget):
         self.contour_overlay_ny = 0
         self.contour_overlay_pix_scale = 1.0
         self.contour_overlay_iso_items = []
+        self._overlay_reproject_cache = None
         self.contour_options = {
             'mode': 'rms',
             'rms': 0.001,
@@ -685,6 +689,9 @@ class ExplorerTab(QWidget):
             'smooth': False,
             'smooth_kernel': 3,
         }
+
+        self.overlay_spectrum_curves = {}
+        self.overlay_spectrum_curves_smooth = {}
         
         self.playback_timer = QTimer()
         self.playback_timer.timeout.connect(self.step_channel)
@@ -878,21 +885,37 @@ class ExplorerTab(QWidget):
         self.plot_spatial_1.showGrid(x=True, y=True, alpha=0.3)
         self.plot_spatial_1.setLabel('bottom', 'Offset (arcsec)')
         self.plot_spatial_1.setLabel('left', 'Flux')
-        self.curve_spatial_1 = self.plot_spatial_1.plot([], [], pen=pg.mkPen('w', width=2))
+        self.plot_spatial_1.addLegend(offset=(1, 1))
+        self.curve_spatial_1 = self.plot_spatial_1.plot([], [], pen=pg.mkPen('w', width=2), name="Base")
         
         self.plot_spatial_2 = pg.PlotWidget(title="Y Profile")
         self.plot_spatial_2.showGrid(x=True, y=True, alpha=0.3)
         self.plot_spatial_2.setLabel('bottom', 'Offset (arcsec)')
         self.plot_spatial_2.setLabel('left', 'Flux')
-        self.curve_spatial_2 = self.plot_spatial_2.plot([], [], pen=pg.mkPen('w', width=2))
+        self.plot_spatial_2.addLegend(offset=(1, 1))
+        self.curve_spatial_2 = self.plot_spatial_2.plot([], [], pen=pg.mkPen('w', width=2), name="Base")
         
         self.lbl_spatial_stats = QLabel("Draw a region to see statistics.")
         self.lbl_spatial_stats.setAlignment(Qt.AlignCenter)
         self.lbl_spatial_stats.setStyleSheet("font-size: 13px; color: #aaa; background-color: #1a1a1a; border: 1px solid #333; border-radius: 4px; padding: 10px;")
-        
+
+        self.spatial_stats_scroll = QScrollArea()
+        self.spatial_stats_scroll.setWidgetResizable(True)
+        self.spatial_stats_scroll.setStyleSheet("QScrollArea { border: 1px solid #333; border-radius: 4px; background-color: #1a1a1a; }")
+        self.spatial_stats_container = QWidget()
+        self.spatial_stats_container.setStyleSheet("background-color: #1a1a1a;")
+        self.spatial_stats_layout = QHBoxLayout(self.spatial_stats_container)
+        self.spatial_stats_layout.setContentsMargins(5, 5, 5, 5)
+        self.spatial_stats_scroll.setWidget(self.spatial_stats_container)
+        self.spatial_stats_scroll.hide()
+
+        self.stacked_spatial_info = QStackedWidget()
+        self.stacked_spatial_info.addWidget(self.lbl_spatial_stats)
+        self.stacked_spatial_info.addWidget(self.spatial_stats_scroll)
+
         spatial_layout.addWidget(self.plot_spatial_1, stretch=1)
         spatial_layout.addWidget(self.plot_spatial_2, stretch=1)
-        spatial_layout.addWidget(self.lbl_spatial_stats)
+        spatial_layout.addWidget(self.stacked_spatial_info)
         self.stacked_panel.addWidget(self.spatial_widget)
 
         self.pv_widget = QWidget()
@@ -1070,7 +1093,7 @@ class ExplorerTab(QWidget):
                           "Moment 2 (Velocity Dispersion)", "Moment 8 (Peak Intensity)",
                           "Moment 9 (Peak Velocity)", "PV Diagram"]
 
-        for i, default_option in enumerate([moment_options[0], moment_options[1], moment_options[2]]):
+        for i, default_option in enumerate([moment_options[0], moment_options[3], moment_options[1]]):
             panel = {}
             panel_frame = QFrame()
             panel_frame.setObjectName("PanelFrame")
@@ -1507,23 +1530,29 @@ class ExplorerTab(QWidget):
         if tool == "None":
             self.plot_spatial_1.hide()
             self.plot_spatial_2.hide()
+            self.stacked_spatial_info.setCurrentIndex(0)
             self.lbl_spatial_stats.setText("Choose a tool to begin analysis.")
+            self.stacked_spatial_info.show()
             return
 
         if tool == "Point":
             self.plot_spatial_1.show()
             self.plot_spatial_1.setTitle("X Profile")
             self.plot_spatial_2.show()
-            self.lbl_spatial_stats.hide()
+            self.stacked_spatial_info.setCurrentIndex(0)
+            self.stacked_spatial_info.hide()
         elif tool == "Line":
             self.plot_spatial_1.show()
             self.plot_spatial_1.setTitle("Spatial Profile")
             self.plot_spatial_2.hide()
-            self.lbl_spatial_stats.hide()
+            self.stacked_spatial_info.setCurrentIndex(0)
+            self.stacked_spatial_info.hide()
         else:
             self.plot_spatial_1.hide()
             self.plot_spatial_2.hide()
-            self.lbl_spatial_stats.show()
+            self.stacked_spatial_info.setCurrentIndex(1)
+            self.spatial_stats_scroll.show()
+            self.stacked_spatial_info.show()
 
         # Auto-draw default shape
         sz = self.nx * self.pix_scale_arcsec * 0.15
@@ -1567,6 +1596,44 @@ class ExplorerTab(QWidget):
         
         roi.sigRegionChanged.connect(self.update_spatial_analysis)
         
+        if tool == "Line":
+            direction_item = pg.PlotDataItem(
+                [], [], connect='finite',
+                pen=pg.mkPen('#f7dc6f', width=3),
+            )
+            direction_item.setZValue(20)
+            self.plot_channel.addItem(direction_item)
+
+            def update_spatial_arrow(r=roi, a=direction_item):
+                points = self.get_line_roi_points(r)
+                if points is None:
+                    a.setData([], [])
+                    return
+                p1, p2 = points
+                vec = p2 - p1
+                length = np.hypot(vec[0], vec[1])
+                if length <= 0:
+                    a.setData([], [])
+                    return
+                unit = vec / length
+                normal = np.array([-unit[1], unit[0]], dtype=float)
+                tip = p1 + 0.62 * vec
+                head_len = min(max(6.0 * self.pix_scale_arcsec, 0.18 * length), 0.32 * length)
+                head_width = 0.75 * head_len
+                base_center = tip - unit * head_len
+                left = base_center + normal * (0.5 * head_width)
+                right = base_center - normal * (0.5 * head_width)
+                a.setData(
+                    [left[0], tip[0], np.nan, right[0], tip[0]],
+                    [left[1], tip[1], np.nan, right[1], tip[1]],
+                )
+
+            roi.sigRegionChanged.connect(update_spatial_arrow)
+            update_spatial_arrow()
+            active_item = self.spatial_rois[-1]
+            active_item["direction_item"] = direction_item
+            active_item["update_spatial_arrow"] = update_spatial_arrow
+
         for item in self.spatial_rois:
             if item["roi"] != roi:
                 item["roi"].setPen(pg.mkPen('c', width=2))
@@ -1623,6 +1690,22 @@ class ExplorerTab(QWidget):
 
     def delete_selected_spatial_regions(self):
         for roi in list(self.spatial_rois_to_delete):
+            for item in self.spatial_rois:
+                if item["roi"] == roi:
+                    di = item.get("direction_item")
+                    if di is not None:
+                        try:
+                            self.plot_channel.removeItem(di)
+                        except Exception:
+                            pass
+                        di.setData([], [])
+                    if "update_spatial_arrow" in item and item["roi"] is not None:
+                        try:
+                            item["roi"].sigRegionChanged.disconnect(item["update_spatial_arrow"])
+                        except Exception:
+                            pass
+                    break
+
             if roi.scene():
                 roi.scene().removeItem(roi)
             else:
@@ -1842,7 +1925,7 @@ class ExplorerTab(QWidget):
         if self.cube_clean is None: return
         data = self.get_current_channel_data()
         if data is None: return
-        
+
         active_item = None
         if self.spatial_rois_to_delete:
             for item in self.spatial_rois:
@@ -1851,42 +1934,73 @@ class ExplorerTab(QWidget):
                     break
         elif self.spatial_rois:
             active_item = self.spatial_rois[-1]
-            
+
         if not active_item:
             self.curve_spatial_1.setData([], [])
             self.curve_spatial_2.setData([], [])
+            self._clear_all_overlay_spatial_curves()
+            self.stacked_spatial_info.setCurrentIndex(0)
+            self.spatial_stats_scroll.hide()
             self.lbl_spatial_stats.setText("Draw a region to see statistics.")
             return
-            
+
         roi = active_item["roi"]
         tool = active_item["tool"]
-        
+
+        if tool == "Point":
+            self.plot_spatial_1.show()
+            self.plot_spatial_1.setTitle("X Profile")
+            self.plot_spatial_2.show()
+        elif tool == "Line":
+            self.plot_spatial_1.show()
+            self.plot_spatial_1.setTitle("Spatial Profile")
+            self.plot_spatial_2.hide()
+        else:
+            self.plot_spatial_1.hide()
+            self.plot_spatial_2.hide()
+
+        overlay_repr = self._get_overlay_reprojections_current()
+
         try:
             if tool == "Point":
                 pos = roi.pos()
                 size = roi.size()
                 cx, cy = pos.x() + size.x()/2, pos.y() + size.y()/2
-                
+
                 start_x = (self.nx / 2) * self.pix_scale_arcsec
                 start_y = -(self.ny / 2) * self.pix_scale_arcsec
                 x_idx = int((cx - start_x) / (-self.pix_scale_arcsec))
                 y_idx = int((cy - start_y) / self.pix_scale_arcsec)
-                
+
                 if 0 <= x_idx < self.nx and 0 <= y_idx < self.ny:
                     x_profile = data[:, y_idx]
                     y_profile = data[x_idx, :]
-                    
+
                     x_axis = (self.nx / 2 - np.arange(self.nx)) * self.pix_scale_arcsec
                     y_axis = (np.arange(self.ny) - self.ny / 2) * self.pix_scale_arcsec
-                    
+
                     self.curve_spatial_1.setData(x_axis, x_profile)
                     self.plot_spatial_1.setLabel('left', f'Flux ({self.display_unit})')
                     self.plot_spatial_1.setLabel('bottom', 'RA offset (arcsec)')
-                    
+
                     self.curve_spatial_2.setData(y_axis, y_profile)
                     self.plot_spatial_2.setLabel('left', f'Flux ({self.display_unit})')
                     self.plot_spatial_2.setLabel('bottom', 'Dec offset (arcsec)')
-                    
+
+                    self.stacked_spatial_info.setCurrentIndex(0)
+                    self.spatial_stats_scroll.hide()
+
+                    for ov_name, ov_data in overlay_repr.items():
+                        ov_x_profile = ov_data[:, y_idx]
+                        ov_y_profile = ov_data[x_idx, :]
+                        ov_color = self._overlay_color_by_name(ov_name)
+
+                        self._update_overlay_spatial_curve(1, ov_name, x_axis, ov_x_profile, ov_color)
+                        self._update_overlay_spatial_curve(2, ov_name, y_axis, ov_y_profile, ov_color)
+
+                    self._cleanup_stale_overlay_spatial_curves(overlay_repr.keys())
+                    self._refresh_spatial_legend(1)
+                    self._refresh_spatial_legend(2)
 
             elif tool == "Line":
                 offsets, profile_2d = self.sample_cube_along_line(roi, data[np.newaxis, :, :])
@@ -1896,8 +2010,48 @@ class ExplorerTab(QWidget):
                     self.curve_spatial_2.setData([], [])
                     self.plot_spatial_1.setLabel('left', f'Flux ({self.display_unit})')
                     self.plot_spatial_1.setLabel('bottom', 'Distance (arcsec)')
+
+                    points = self.get_line_roi_points(roi)
+                    if points is not None:
+                        p1, p2 = points
+                        dx_w = p2[0] - p1[0]
+                        dy_w = p2[1] - p1[1]
+                        length_arcsec = np.hypot(dx_w, dy_w)
+                        n_samples = max(int(np.ceil(length_arcsec / max(self.pix_scale_arcsec, 1e-6))) + 1, 2)
+
+                        xs = np.linspace(p1[0], p2[0], n_samples)
+                        ys = np.linspace(p1[1], p2[1], n_samples)
+
+                        x_pix, y_pix = self.world_to_pixel(xs, ys)
+                        valid = (x_pix >= 0) & (x_pix <= self.nx - 1) & (y_pix >= 0) & (y_pix <= self.ny - 1)
+
+                        for ov_name, ov_data in overlay_repr.items():
+                            ov_samples = np.full(n_samples, np.nan, dtype=np.float64)
+                            if np.any(valid):
+                                x0 = np.floor(x_pix[valid]).astype(np.int64)
+                                y0 = np.floor(y_pix[valid]).astype(np.int64)
+                                x1 = np.clip(x0 + 1, 0, self.nx - 1).astype(np.int64)
+                                y1 = np.clip(y0 + 1, 0, self.ny - 1).astype(np.int64)
+                                fx = (x_pix[valid] - x0).astype(np.float64)
+                                fy = (y_pix[valid] - y0).astype(np.float64)
+                                ov_buf = np.ascontiguousarray(ov_data[np.newaxis, :, :], dtype=np.float64)
+                                ov_out = np.empty((1, int(valid.sum())), dtype=np.float64)
+                                _bilinear_interp(ov_buf, x0, y0, x1, y1, fx, fy, ov_out)
+                                ov_samples[valid] = ov_out[0]
+
+                            ov_color = self._overlay_color_by_name(ov_name)
+                            self._update_overlay_spatial_curve(1, ov_name, offsets, ov_samples, ov_color)
+
+                    self.curve_spatial_2.setData([], [])
+                    for curve_name in list(getattr(self, 'overlay_spatial_curves_2', {}).keys()):
+                        getattr(self, 'overlay_spatial_curves_2')[curve_name].setData([], [])
+
+                    self._cleanup_stale_overlay_spatial_curves_plot1(overlay_repr.keys())
+                    self._refresh_spatial_legend(1)
+                    self.stacked_spatial_info.setCurrentIndex(0)
+                    self.spatial_stats_scroll.hide()
                     self.lbl_spatial_stats.setText("Line profile plotted.")
-                    
+
             elif tool in ["Rectangle", "Ellipse"]:
                 sub_data = roi.getArrayRegion(data, self.view_channel.getImageItem())
                 if sub_data is not None and sub_data.size > 0:
@@ -1909,27 +2063,185 @@ class ExplorerTab(QWidget):
                         min_val = np.min(valid)
                         rms_val = np.sqrt(np.mean(valid**2))
                         std_val = np.std(valid)
-                        
-                        stats_text = (
-                            f"<b>Statistics</b><br><br>"
-                            f"<table style='width:100%'>"
-                            f"<tr><td>Mean:</td><td>{mean_val:.4g} {self.display_unit}</td></tr>"
-                            f"<tr><td>Sum:</td><td>{sum_val:.4g} {self.display_unit}</td></tr>"
-                            f"<tr><td>Peak:</td><td>{max_val:.4g} {self.display_unit}</td></tr>"
-                            f"<tr><td>Min:</td><td>{min_val:.4g} {self.display_unit}</td></tr>"
-                            f"<tr><td>RMS:</td><td>{rms_val:.4g} {self.display_unit}</td></tr>"
-                            f"<tr><td>Std Dev:</td><td>{std_val:.4g} {self.display_unit}</td></tr>"
-                            f"</table>"
-                        )
-                        self.lbl_spatial_stats.setText(stats_text)
-                    else:
-                        self.lbl_spatial_stats.setText("No valid data in region.")
 
+                        self._clear_spatial_stats_panels()
+
+                        base_panel = self._make_stats_panel("Base Cube", "white", [
+                            ("Mean", f"{mean_val:.4g} {self.display_unit}"),
+                            ("Sum", f"{sum_val:.4g} {self.display_unit}"),
+                            ("Peak", f"{max_val:.4g} {self.display_unit}"),
+                            ("Min", f"{min_val:.4g} {self.display_unit}"),
+                            ("RMS", f"{rms_val:.4g} {self.display_unit}"),
+                            ("Std Dev", f"{std_val:.4g} {self.display_unit}"),
+                        ])
+                        self.spatial_stats_layout.addWidget(base_panel)
+
+                        for ov_name, ov_data in overlay_repr.items():
+                            ov_sub = roi.getArrayRegion(ov_data, self.view_channel.getImageItem())
+                            if ov_sub is not None and ov_sub.size > 0:
+                                ov_valid = ov_sub[~np.isnan(ov_sub)]
+                                if len(ov_valid) > 0:
+                                    ov_mean = np.mean(ov_valid)
+                                    ov_sum = np.sum(ov_valid)
+                                    ov_max = np.max(ov_valid)
+                                    ov_min = np.min(ov_valid)
+                                    ov_rms = np.sqrt(np.mean(ov_valid**2))
+                                    ov_std = np.std(ov_valid)
+                                    ov_color = self._overlay_color_by_name(ov_name)
+                                    ov_panel = self._make_stats_panel(ov_name, ov_color, [
+                                        ("Mean", f"{ov_mean:.4g}"),
+                                        ("Sum", f"{ov_sum:.4g}"),
+                                        ("Peak", f"{ov_max:.4g}"),
+                                        ("Min", f"{ov_min:.4g}"),
+                                        ("RMS", f"{ov_rms:.4g}"),
+                                        ("Std Dev", f"{ov_std:.4g}"),
+                                    ])
+                                    self.spatial_stats_layout.addWidget(ov_panel)
+
+                        self.spatial_stats_layout.addStretch()
+                        self.stacked_spatial_info.setCurrentIndex(1)
+                        self.spatial_stats_scroll.show()
+                        self.curve_spatial_1.setData([], [])
+                        self.curve_spatial_2.setData([], [])
+                        self._clear_all_overlay_spatial_curves()
+                    else:
+                        self.stacked_spatial_info.setCurrentIndex(0)
+                        self.spatial_stats_scroll.hide()
+                        self.lbl_spatial_stats.setText("No valid data in region.")
 
         except Exception as e:
             with open("line_debug.txt", "a") as dbg:
                 dbg.write(f"Exception: {e}\n")
             print(f"Error in update_spatial_analysis: {e}")
+
+    def _get_overlay_reprojections_current(self):
+        result = {}
+        if not self.contour_overlays or self.cube_clean is None:
+            return result
+        current_ch = self.slider_channel.value()
+        for ov in self.contour_overlays:
+            if ov.get('_reproj_raw') is not None and ov.get('_reproj_channel') == current_ch:
+                result[ov['name']] = ov['_reproj_raw']
+                continue
+            overlay_slice = self._get_overlay_slice_for_channel(ov)
+            if overlay_slice is None:
+                continue
+            reprojected = self._reproject_overlay_slice(ov, overlay_slice)
+            if reprojected is not None:
+                result[ov['name']] = reprojected
+                ov['_reproj_raw'] = reprojected
+                ov['_reproj_channel'] = current_ch
+        return result
+
+    def _overlay_color_by_name(self, name):
+        for ov in self.contour_overlays:
+            if ov['name'] == name:
+                return ov['options']['color']
+        return 'white'
+
+    def _update_overlay_spatial_curve(self, plot_num, ov_name, x, y, color):
+        x = np.asarray(x, dtype=float).ravel()
+        y = np.asarray(y, dtype=float).ravel()
+        if len(x) != len(y) or len(x) == 0:
+            return
+        attr_name = f'overlay_spatial_curves_{plot_num}'
+        if not hasattr(self, attr_name):
+            setattr(self, attr_name, {})
+        curves = getattr(self, attr_name)
+        if ov_name not in curves:
+            c = self.plot_spatial_1.plot([], [], pen=pg.mkPen(color, width=2, style=Qt.DashLine), name=ov_name) if plot_num == 1 else \
+                self.plot_spatial_2.plot([], [], pen=pg.mkPen(color, width=2, style=Qt.DashLine), name=ov_name)
+            curves[ov_name] = c
+        curves[ov_name].setPen(pg.mkPen(color, width=2, style=Qt.DashLine))
+        curves[ov_name].setData(x, y)
+
+    def _cleanup_stale_overlay_spatial_curves(self, active_names):
+        for pnum in [1, 2]:
+            attr = f'overlay_spatial_curves_{pnum}'
+            if not hasattr(self, attr):
+                continue
+            curves = getattr(self, attr)
+            plot = self.plot_spatial_1 if pnum == 1 else self.plot_spatial_2
+            for name in list(curves.keys()):
+                if name not in active_names:
+                    c = curves.pop(name)
+                    try:
+                        plot.removeItem(c)
+                    except Exception:
+                        pass
+                    c.setData([], [])
+
+    def _cleanup_stale_overlay_spatial_curves_plot1(self, active_names):
+        self._cleanup_stale_overlay_spatial_curves(active_names)
+        curves = getattr(self, 'overlay_spatial_curves_2', {})
+        for curve_name in list(curves.keys()):
+            c = curves.pop(curve_name)
+            try:
+                self.plot_spatial_2.removeItem(c)
+            except Exception:
+                pass
+            c.setData([], [])
+
+    def _clear_all_overlay_spatial_curves(self):
+        for pnum in [1, 2]:
+            attr = f'overlay_spatial_curves_{pnum}'
+            plot = self.plot_spatial_1 if pnum == 1 else self.plot_spatial_2
+            if hasattr(self, attr):
+                for c in getattr(self, attr).values():
+                    try:
+                        plot.removeItem(c)
+                    except Exception:
+                        pass
+                    c.setData([], [])
+                setattr(self, attr, {})
+
+    def _refresh_spatial_legend(self, plot_num):
+        plot = self.plot_spatial_1 if plot_num == 1 else self.plot_spatial_2
+        if not hasattr(plot, 'plotItem') or plot.plotItem.legend is None:
+            return
+        legend = plot.plotItem.legend
+        legend.clear()
+        base_curve = self.curve_spatial_1 if plot_num == 1 else self.curve_spatial_2
+        if base_curve.xData is not None and len(base_curve.xData) > 0:
+            legend.addItem(base_curve, "Base")
+        curves = getattr(self, f'overlay_spatial_curves_{plot_num}', {})
+        for name, c in curves.items():
+            if c.xData is not None and len(c.xData) > 0:
+                legend.addItem(c, name)
+
+    def _make_stats_panel(self, title, color, rows):
+        panel = QWidget()
+        panel.setStyleSheet("background-color: #2a2a2a; border: 1px solid #555; border-radius: 6px; padding: 0px;")
+        panel.setFixedWidth(220)
+        layout = QVBoxLayout(panel)
+        layout.setContentsMargins(10, 8, 10, 8)
+        layout.setSpacing(3)
+        title_lbl = QLabel(title)
+        title_lbl.setStyleSheet(f"font-weight: bold; color: {color}; font-size: 13px; border: none; padding: 0px; background: transparent;")
+        title_lbl.setAlignment(Qt.AlignCenter)
+        layout.addWidget(title_lbl)
+        layout.addSpacing(5)
+        for label, value in rows:
+            row_layout = QHBoxLayout()
+            row_layout.setSpacing(4)
+            lbl_name = QLabel(label + ":")
+            lbl_name.setStyleSheet("color: #999; font-size: 11px; border: none; padding: 0px; background: transparent;")
+            lbl_val = QLabel(value)
+            lbl_val.setStyleSheet("color: #eee; font-size: 11px; font-weight: bold; border: none; padding: 0px; background: transparent;")
+            lbl_val.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            row_layout.addWidget(lbl_name)
+            row_layout.addWidget(lbl_val, stretch=1)
+            layout.addLayout(row_layout)
+        return panel
+
+    def _clear_spatial_stats_panels(self):
+        while self.spatial_stats_layout.count():
+            item = self.spatial_stats_layout.takeAt(0)
+            w = item.widget()
+            if w:
+                w.hide()
+                w.setParent(None)
+                w.deleteLater()
 
 
     def update_wcs_mode(self, is_absolute):
@@ -2214,6 +2526,7 @@ class ExplorerTab(QWidget):
         if hasattr(self, 'curve_spatial_1'):
             self.curve_spatial_1.setData([], [])
             self.curve_spatial_2.setData([], [])
+            self.stacked_spatial_info.setCurrentIndex(0)
             self.lbl_spatial_stats.setText("Draw a region to see statistics.")
         self.v_line.hide()
         self.region.hide()
@@ -2234,31 +2547,12 @@ class ExplorerTab(QWidget):
             self.active_contours[k] = []
         self.clear_catalog_lines()
         self._clear_overlay_contours()
-        self.contour_overlay_file = None
-        self.contour_overlay_cube = None
-        self.contour_overlay_wcs = None
-        self.contour_overlay_v_axis = None
-        self.contour_overlay_is_static = False
-        self.contour_overlay_2d = None
+        self.contour_overlays = []
+        self.overlay_spectrum_curves = {}
+        self.overlay_spectrum_curves_smooth = {}
+        self._clear_all_overlay_spatial_curves()
         self.btn_contour_overlay.setEnabled(False)
         self.btn_contour_overlay.hide()
-        self.contour_options = {
-            'mode': 'rms',
-            'rms': 0.001,
-            'multipliers_str': '3, 5, 10, 20, 40',
-            'lin_min': 0.0,
-            'lin_max': 10.0,
-            'n_levels': 5,
-            'log_min': 0.001,
-            'log_max': 10.0,
-            'log_base': 10.0,
-            'percentages_str': '10, 30, 50, 70, 90',
-            'color': 'white',
-            'line_width': 1.5,
-            'line_style': 'solid',
-            'smooth': False,
-            'smooth_kernel': 3,
-        }
         self.parent_window.update_menu_states()
 
     # --- DYNAMIC LINE CATALOG ENGINE ---
@@ -2358,6 +2652,7 @@ class ExplorerTab(QWidget):
             is_static = False
             static_2d = None
             is_2d_image = False
+            sc = None
 
             try:
                 sc = SpectralCube.read(file_name).with_spectral_unit(u.km / u.s, velocity_convention='radio')
@@ -2457,58 +2752,103 @@ class ExplorerTab(QWidget):
                         "The contour cube covers a different velocity range.")
                     return False
 
-            self.contour_overlay_file = file_name
-            self.contour_overlay_cube = overlay_cube
-            self.contour_overlay_wcs = overlay_wcs
-            self.contour_overlay_v_axis = overlay_v
-            self.contour_overlay_is_static = is_static
-            self.contour_overlay_2d = static_2d
-            self.contour_overlay_nx = nx_o
-            self.contour_overlay_ny = ny_o
-            self.contour_overlay_pix_scale = pix_scale_o
+            color_idx = len(self.contour_overlays) % len(self.overlay_color_palette)
+            assigned_color = self.overlay_color_palette[color_idx]
 
-            self._update_contour_options_rms()
+            default_opts = {
+                'mode': 'percent',
+                'rms': 0.001,
+                'multipliers_str': '3, 5, 10, 20, 40',
+                'lin_min': 0.0,
+                'lin_max': 10.0,
+                'n_levels': 5,
+                'log_min': 0.001,
+                'log_max': 10.0,
+                'log_base': 10.0,
+                'percentages_str': '10, 30, 50, 70, 90',
+                'color': assigned_color,
+                'line_width': 1.5,
+                'line_style': 'solid',
+                'smooth': False,
+                'smooth_kernel': 3,
+            }
+            overlay_name = file_name.split('/')[-1]
+            if len(overlay_name) > 20:
+                overlay_name = overlay_name[:17] + '...'
+
+            overlay_dict = {
+                'file': file_name,
+                'name': overlay_name,
+                'cube': overlay_cube,
+                'wcs': overlay_wcs,
+                'v_axis': overlay_v,
+                'is_static': is_static,
+                '2d': static_2d,
+                'nx': nx_o,
+                'ny': ny_o,
+                'pix_scale': pix_scale_o,
+                'iso_items': [],
+                'reproject_cache': None,
+                'options': default_opts.copy(),
+                'color': assigned_color,
+            }
+
+            self._update_contour_options_rms_for(overlay_dict)
+            self.contour_overlays.append(overlay_dict)
+
             self.btn_contour_overlay.setEnabled(True)
             self.btn_contour_overlay.show()
             self.update_channel_map()
+            self.update_spectrum()
 
-            v_info = "static (single-channel / 2D)" if is_static else f"{nv_o} channels"
+            v_info = "static" if is_static else f"{nv_o} channels"
             self.parent_window.statusBar().showMessage(
-                f"Contour overlay loaded: {file_name.split('/')[-1]} ({v_info})")
+                f"Overlay {len(self.contour_overlays)} loaded: {overlay_name} ({v_info}, {assigned_color})")
             return True
 
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to load overlay file:\n{str(e)}")
             return False
 
-    def _update_contour_options_rms(self):
-        slice_data = self._get_overlay_slice_for_current_channel()
+    def _make_default_overlay_options(self, color):
+        return {
+            'mode': 'percent', 'rms': 0.001,
+            'multipliers_str': '3, 5, 10, 20, 40',
+            'lin_min': 0.0, 'lin_max': 10.0, 'n_levels': 5,
+            'log_min': 0.001, 'log_max': 10.0, 'log_base': 10.0,
+            'percentages_str': '10, 30, 50, 70, 90',
+            'color': color, 'line_width': 1.5, 'line_style': 'solid',
+            'smooth': False, 'smooth_kernel': 3,
+        }
+
+    def _update_contour_options_rms_for(self, overlay_dict):
+        slice_data = self._get_overlay_slice_for_channel(overlay_dict)
         if slice_data is None:
             return
         valid = slice_data[np.isfinite(slice_data)]
         if len(valid) > 1:
             rms = float(np.std(valid))
             if rms > 0:
-                self.contour_options['rms'] = rms
-                self.contour_options['lin_min'] = rms * 3
-                self.contour_options['lin_max'] = rms * 40
-                self.contour_options['log_min'] = max(rms, 1e-12)
+                overlay_dict['options']['rms'] = rms
+                overlay_dict['options']['lin_min'] = rms * 3
+                overlay_dict['options']['lin_max'] = rms * 40
+                overlay_dict['options']['log_min'] = max(rms, 1e-12)
                 peak = float(np.nanmax(np.abs(valid)))
-                self.contour_options['log_max'] = max(peak, rms * 10)
-        self.contour_options['multipliers_str'] = '3, 5, 10, 20, 40'
+                overlay_dict['options']['log_max'] = max(peak, rms * 10)
+        overlay_dict['options']['multipliers_str'] = '3, 5, 10, 20, 40'
 
-    def _get_overlay_slice_for_current_channel(self):
-        if self.contour_overlay_cube is None:
+    def _get_overlay_slice_for_channel(self, overlay_dict):
+        if overlay_dict is None:
             return None
-        if self.contour_overlay_is_static:
-            return self.contour_overlay_2d
+        if overlay_dict['is_static']:
+            return overlay_dict['2d']
 
         idx = self.slider_channel.value()
         if self.v_axis is None or idx >= len(self.v_axis):
             return None
         target_v = self.v_axis[idx]
 
-        overlay_v = self.contour_overlay_v_axis
+        overlay_v = overlay_dict['v_axis']
         if overlay_v is None:
             return None
 
@@ -2516,40 +2856,68 @@ class ExplorerTab(QWidget):
             return None
 
         nearest_idx = int(np.argmin(np.abs(overlay_v - target_v)))
-        if nearest_idx < 0 or nearest_idx >= self.contour_overlay_cube.shape[0]:
+        if nearest_idx < 0 or nearest_idx >= overlay_dict['cube'].shape[0]:
             return None
-        return self.contour_overlay_cube[nearest_idx]
+        return overlay_dict['cube'][nearest_idx]
 
-    def _reproject_overlay_slice(self, overlay_slice):
+    def _get_overlay_slice_for_current_channel(self):
+        if self.contour_overlay_cube is None:
+            return None
+        return self._get_overlay_slice_for_channel({
+            'cube': self.contour_overlay_cube,
+            'is_static': self.contour_overlay_is_static,
+            '2d': self.contour_overlay_2d,
+            'v_axis': self.contour_overlay_v_axis,
+        })
+
+    def _reproject_overlay_slice(self, overlay_dict, overlay_slice):
         primary_wcs = self.wcs_2d
-        overlay_wcs = self.contour_overlay_wcs
+        overlay_wcs = overlay_dict['wcs']
         if primary_wcs is None or overlay_wcs is None or overlay_slice is None:
             return None
 
-        px = np.arange(self.nx, dtype=float)
-        py = np.arange(self.ny, dtype=float)
-        PX, PY = np.meshgrid(px, py, indexing='ij')
-        pts_pix = np.column_stack([PX.ravel(), PY.ravel()])
+        cache = overlay_dict.get('reproject_cache')
+        if cache is None:
+            px = np.arange(self.nx, dtype=float)
+            py = np.arange(self.ny, dtype=float)
+            PX, PY = np.meshgrid(px, py, indexing='ij')
+            pts_pix = np.column_stack([PX.ravel(), PY.ravel()])
 
-        ra_arr, dec_arr = primary_wcs.wcs_pix2world(pts_pix, 0).T
-        ox, oy = overlay_wcs.wcs_world2pix(np.column_stack([ra_arr, dec_arr]), 0).T
+            ra_arr, dec_arr = primary_wcs.wcs_pix2world(pts_pix, 0).T
+            ox, oy = overlay_wcs.wcs_world2pix(np.column_stack([ra_arr, dec_arr]), 0).T
 
-        ox = ox.reshape(self.nx, self.ny)
-        oy = oy.reshape(self.nx, self.ny)
+            ox = ox.reshape(self.nx, self.ny)
+            oy = oy.reshape(self.nx, self.ny)
+
+            valid = (ox >= 0) & (ox < overlay_dict['nx'] - 1) & (oy >= 0) & (oy < overlay_dict['ny'] - 1)
+            if not np.any(valid):
+                result = np.full((self.nx, self.ny), np.nan, dtype=np.float64)
+                cache = {'valid': valid, 'x0': None, 'y0': None, 'x1': None, 'y1': None, 'fx': None, 'fy': None}
+                overlay_dict['reproject_cache'] = cache
+                return result
+
+            vx = ox[valid]
+            vy = oy[valid]
+            x0 = np.floor(vx).astype(np.int64)
+            y0 = np.floor(vy).astype(np.int64)
+            x1 = np.clip(x0 + 1, 0, overlay_dict['nx'] - 1).astype(np.int64)
+            y1 = np.clip(y0 + 1, 0, overlay_dict['ny'] - 1).astype(np.int64)
+            fx = (vx - x0.astype(float)).astype(np.float64)
+            fy = (vy - y0.astype(float)).astype(np.float64)
+
+            cache = {'valid': valid, 'x0': x0, 'y0': y0, 'x1': x1, 'y1': y1, 'fx': fx, 'fy': fy}
+            overlay_dict['reproject_cache'] = cache
+        elif cache.get('x0') is None:
+            return np.full((self.nx, self.ny), np.nan, dtype=np.float64)
 
         result = np.full((self.nx, self.ny), np.nan, dtype=np.float64)
-        valid = (ox >= 0) & (ox < self.contour_overlay_nx - 1) & (oy >= 0) & (oy < self.contour_overlay_ny - 1)
-        if not np.any(valid):
-            return result
-
-        vx = ox[valid]
-        vy = oy[valid]
-        x0 = np.floor(vx).astype(np.int64)
-        y0 = np.floor(vy).astype(np.int64)
-        x1 = np.clip(x0 + 1, 0, self.contour_overlay_nx - 1).astype(np.int64)
-        y1 = np.clip(y0 + 1, 0, self.contour_overlay_ny - 1).astype(np.int64)
-        fx = vx - x0.astype(float)
-        fy = vy - y0.astype(float)
+        valid = cache['valid']
+        x0 = cache['x0']
+        y0 = cache['y0']
+        x1 = cache['x1']
+        y1 = cache['y1']
+        fx = cache['fx']
+        fy = cache['fy']
 
         vals = ((1.0 - fx) * (1.0 - fy) * overlay_slice[x0, y0]
                 + fx * (1.0 - fy) * overlay_slice[x1, y0]
@@ -2558,40 +2926,39 @@ class ExplorerTab(QWidget):
         result[valid] = vals
         return result
 
-    def _compute_contour_levels(self, data):
+    def _compute_contour_levels(self, data, options):
         if data is None:
             return []
         valid = data[np.isfinite(data)]
         if len(valid) == 0:
             return []
-        opts = self.contour_options
-        mode = opts.get('mode', 'rms')
+        mode = options.get('mode', 'rms')
 
         if mode == 'rms':
-            rms = opts.get('rms', 0.001)
+            rms = options.get('rms', 0.001)
             mean_val = float(np.nanmean(valid))
             try:
-                mults = [float(x.strip()) for x in opts.get('multipliers_str', '3,5,10,20,40').split(',') if x.strip()]
+                mults = [float(x.strip()) for x in options.get('multipliers_str', '3,5,10,20,40').split(',') if x.strip()]
             except ValueError:
                 mults = [3, 5, 10, 20]
             levels = [mean_val + m * rms for m in mults]
         elif mode == 'linear':
-            lo = opts.get('lin_min', float(np.nanmin(valid)))
-            hi = opts.get('lin_max', float(np.nanmax(valid)))
-            n = max(int(opts.get('n_levels', 5)), 1)
+            lo = options.get('lin_min', float(np.nanmin(valid)))
+            hi = options.get('lin_max', float(np.nanmax(valid)))
+            n = max(int(options.get('n_levels', 5)), 1)
             levels = np.linspace(lo, hi, n).tolist()
         elif mode == 'log':
-            lo = max(opts.get('log_min', 0.001), 1e-12)
-            hi = max(opts.get('log_max', 10.0), lo * 1.01)
-            n = max(int(opts.get('n_levels', 5)), 1)
-            base = opts.get('log_base', 10.0)
+            lo = max(options.get('log_min', 0.001), 1e-12)
+            hi = max(options.get('log_max', 10.0), lo * 1.01)
+            n = max(int(options.get('n_levels', 5)), 1)
+            base = options.get('log_base', 10.0)
             log_lo = np.log(lo) / np.log(base)
             log_hi = np.log(hi) / np.log(base)
             levels = np.logspace(log_lo, log_hi, n, base=base).tolist()
         elif mode == 'percent':
             peak = float(np.nanmax(valid))
             try:
-                pcts = [float(x.strip()) for x in opts.get('percentages_str', '10,30,50,70,90').split(',') if x.strip()]
+                pcts = [float(x.strip()) for x in options.get('percentages_str', '10,30,50,70,90').split(',') if x.strip()]
             except ValueError:
                 pcts = [10, 30, 50, 70, 90]
             levels = [peak * p / 100.0 for p in pcts]
@@ -2600,80 +2967,145 @@ class ExplorerTab(QWidget):
 
         return sorted([float(lv) for lv in levels if np.isfinite(lv)])
 
-    def _clear_overlay_contours(self):
-        for iso in self.contour_overlay_iso_items:
+    def _clear_overlay_contours(self, overlay_dict=None):
+        if overlay_dict is None:
+            for ov in self.contour_overlays:
+                self._clear_overlay_contours(ov)
+            return
+        for iso in overlay_dict.get('iso_items', []):
             iso.setParentItem(None)
             if iso.scene() is not None:
                 self.view_channel.getView().removeItem(iso)
-        self.contour_overlay_iso_items = []
+        overlay_dict['iso_items'] = []
 
     def draw_overlay_contours(self):
         self._clear_overlay_contours()
-        if self.contour_overlay_cube is None or self.cube_clean is None:
+        if not self.contour_overlays or self.cube_clean is None:
             return
 
-        overlay_slice = self._get_overlay_slice_for_current_channel()
-        if overlay_slice is None:
-            return
+        for overlay_dict in self.contour_overlays:
+            overlay_slice = self._get_overlay_slice_for_channel(overlay_dict)
+            if overlay_slice is None:
+                continue
 
-        reprojected = self._reproject_overlay_slice(overlay_slice)
-        if reprojected is None:
-            return
+            reprojected = self._reproject_overlay_slice(overlay_dict, overlay_slice)
+            if reprojected is None:
+                continue
 
-        if self.contour_options.get('smooth', False):
-            k = int(self.contour_options.get('smooth_kernel', 3))
-            if k % 2 == 0:
-                k += 1
-            if k >= 3:
-                from scipy.ndimage import gaussian_filter
-                mask = np.isfinite(reprojected)
-                smooth_data = np.where(mask, reprojected, 0.0)
-                smooth_data = gaussian_filter(smooth_data, sigma=k / 3.0)
-                smooth_data[~mask] = np.nan
-                reprojected = smooth_data
+            overlay_dict['_reproj_raw'] = reprojected
+            overlay_dict['_reproj_channel'] = self.slider_channel.value()
 
-        levels = self._compute_contour_levels(reprojected)
-        if not levels:
-            return
+            opts = overlay_dict['options']
+            if opts.get('smooth', False):
+                k = int(opts.get('smooth_kernel', 3))
+                if k % 2 == 0:
+                    k += 1
+                if k >= 3:
+                    from scipy.ndimage import gaussian_filter
+                    mask = np.isfinite(reprojected)
+                    smooth_data = np.where(mask, reprojected, 0.0)
+                    smooth_data = gaussian_filter(smooth_data, sigma=k / 3.0)
+                    smooth_data[~mask] = np.nan
+                    reprojected = smooth_data
 
-        color = self.contour_options.get('color', 'white')
-        lw = self.contour_options.get('line_width', 1.5)
-        style_str = self.contour_options.get('line_style', 'solid')
+            levels = self._compute_contour_levels(reprojected, opts)
+            if not levels:
+                continue
 
-        style_map = {'solid': Qt.SolidLine, 'dashed': Qt.DashLine, 'dotted': Qt.DotLine}
-        pen_style = style_map.get(style_str, Qt.SolidLine)
+            min_val = float(np.nanmin(reprojected))
+            max_val = float(np.nanmax(reprojected))
+            if not (np.isfinite(min_val) and np.isfinite(max_val)):
+                continue
+            data_range = max(abs(max_val - min_val), 1e-12)
+            nan_fill = min_val - 10.0 * data_range
+            reprojected = np.where(np.isfinite(reprojected), reprojected, nan_fill)
 
-        for lvl in levels:
-            iso = pg.IsocurveItem(data=reprojected, level=lvl, pen=pg.mkPen(color, width=lw, style=pen_style))
-            iso.setParentItem(self.view_channel.getImageItem())
-            iso.setZValue(10)
-            self.contour_overlay_iso_items.append(iso)
+            color = opts.get('color', 'white')
+            lw = opts.get('line_width', 1.5)
+            style_str = opts.get('line_style', 'solid')
 
-    def close_overlay(self):
-        self._clear_overlay_contours()
-        self.contour_overlay_file = None
-        self.contour_overlay_cube = None
-        self.contour_overlay_wcs = None
-        self.contour_overlay_v_axis = None
-        self.contour_overlay_is_static = False
-        self.contour_overlay_2d = None
-        self.btn_contour_overlay.setEnabled(False)
-        self.btn_contour_overlay.hide()
+            style_map = {'solid': Qt.SolidLine, 'dashed': Qt.DashLine, 'dotted': Qt.DotLine}
+            pen_style = style_map.get(style_str, Qt.SolidLine)
+
+            for lvl in levels:
+                iso = pg.IsocurveItem(data=reprojected, level=lvl, pen=pg.mkPen(color, width=lw, style=pen_style))
+                iso.setParentItem(self.view_channel.getImageItem())
+                iso.setZValue(10)
+                overlay_dict['iso_items'].append(iso)
+
+    def close_overlay(self, index=None):
+        removed_name = None
+        if index is not None:
+            if 0 <= index < len(self.contour_overlays):
+                ov = self.contour_overlays.pop(index)
+                removed_name = ov['name']
+                self._clear_overlay_contours(ov)
+        else:
+            self._clear_overlay_contours()
+            self.contour_overlays = []
+        if removed_name is not None:
+            suffix = " (overlay)"
+            to_remove = [n for n in self.overlay_spectrum_curves if n == f"{removed_name}{suffix}"]
+            for name in to_remove:
+                c = self.overlay_spectrum_curves.pop(name)
+                try:
+                    if c.scene():
+                        c.scene().removeItem(c)
+                    else:
+                        self.plot_widget.removeItem(c)
+                except Exception:
+                    pass
+            to_remove_s = [n for n in self.overlay_spectrum_curves_smooth if n == f"{removed_name}{suffix}"]
+            for name in to_remove_s:
+                c = self.overlay_spectrum_curves_smooth.pop(name)
+                try:
+                    if c.scene():
+                        c.scene().removeItem(c)
+                    else:
+                        self.plot_widget_smooth.removeItem(c)
+                except Exception:
+                    pass
+        else:
+            for name in list(self.overlay_spectrum_curves.keys()):
+                c = self.overlay_spectrum_curves.pop(name)
+                try:
+                    if c.scene():
+                        c.scene().removeItem(c)
+                    else:
+                        self.plot_widget.removeItem(c)
+                except Exception:
+                    pass
+            for name in list(self.overlay_spectrum_curves_smooth.keys()):
+                c = self.overlay_spectrum_curves_smooth.pop(name)
+                try:
+                    if c.scene():
+                        c.scene().removeItem(c)
+                    else:
+                        self.plot_widget_smooth.removeItem(c)
+                except Exception:
+                    pass
+        if not self.contour_overlays:
+            self.btn_contour_overlay.setEnabled(False)
+            self.btn_contour_overlay.hide()
         self.parent_window.statusBar().showMessage("Contour overlay removed.")
         self.update_channel_map()
+        self.update_spectrum()
 
     def open_contour_options(self):
-        if self.contour_overlay_cube is None:
+        if not self.contour_overlays:
             QMessageBox.warning(self, "No Overlay", "Please load a contour overlay file first.")
             return
 
-        dlg = ContourOptionsDialog(self, self.contour_options)
-        if dlg.exec_():
-            if dlg.action == 'clear':
-                self.close_overlay()
-            elif dlg.action == 'apply' and dlg.result_options:
-                self.contour_options = dlg.result_options
-                self.draw_overlay_contours()
+        if hasattr(self, '_contour_options_dlg') and self._contour_options_dlg is not None and self._contour_options_dlg.isVisible():
+            self._contour_options_dlg.raise_()
+            self._contour_options_dlg.activateWindow()
+            return
+
+        dlg = ContourOptionsDialog(self, self.contour_overlays)
+        self._contour_options_dlg = dlg
+        dlg.setAttribute(Qt.WA_DeleteOnClose, True)
+        dlg.destroyed.connect(lambda: setattr(self, '_contour_options_dlg', None))
+        dlg.show()
 
     # ==================== MAP & ROI FUNCTIONS ====================
     def draw_contours(self, target_id, view, data):
@@ -3074,26 +3506,147 @@ class ExplorerTab(QWidget):
                                 self.plot_widget_smooth.addItem(c_s)
                             self.spectrum_curves_smooth[name].setData(x=ve, y=ss_smooth)
 
+        num_spatial_regions = len(active_rois)
+        active_spatial_roi = active_rois[0]["roi"] if active_rois else None
+        if num_spatial_regions <= 1 and self.contour_overlays:
+            for ov in self.contour_overlays:
+                if ov['is_static'] or ov['v_axis'] is None:
+                    continue
+                ov_name = ov['name']
+                ov_color = ov['options']['color']
+
+                if active_spatial_roi is None:
+                    ov_sub_data = ov['cube']
+                else:
+                    ov_sub_data = active_spatial_roi.getArrayRegion(ov['cube'], self.view_channel.getImageItem(), axes=(1, 2))
+
+                if "Max" in stat:
+                    ov_spec = np.nanmax(ov_sub_data, axis=(1, 2))
+                elif "Sum" in stat:
+                    ov_spec = np.nansum(ov_sub_data, axis=(1, 2))
+                else:
+                    ov_spec = np.nanmean(ov_sub_data, axis=(1, 2))
+
+                ov_v = ov['v_axis']
+                ov_sort = np.argsort(ov_v)
+                ov_vs, ov_ss = ov_v[ov_sort], ov_spec[ov_sort]
+
+                from scipy.interpolate import interp1d
+                try:
+                    interp = interp1d(ov_vs, ov_ss, kind='linear', bounds_error=False,
+                                      fill_value=(ov_ss[0], ov_ss[-1]))
+                    ss_resampled = interp(vs)
+                except Exception:
+                    ss_resampled = np.full_like(vs, np.nan)
+
+                display_name = f"{ov_name} (overlay)"
+                curve_color = pg.mkPen(ov_color, width=2, style=Qt.DashLine)
+
+                if display_name not in self.overlay_spectrum_curves:
+                    c = pg.PlotDataItem([], [], stepMode="center", pen=curve_color, name=display_name)
+                    self.overlay_spectrum_curves[display_name] = c
+                    self.plot_widget.addItem(c)
+                self.overlay_spectrum_curves[display_name].setPen(curve_color)
+                self.overlay_spectrum_curves[display_name].setData(x=ve, y=ss_resampled)
+
+                if getattr(self, 'smoothing_params', None) is not None and getattr(self, 'spectrum_tabs', None) is not None:
+                    if self.spectrum_tabs.indexOf(self.plot_widget_smooth) != -1:
+                        method = self.smoothing_params['method']
+                        ss_ov_smooth = ss_resampled.copy()
+                        try:
+                            if method == 'boxcar':
+                                from scipy.ndimage import uniform_filter1d
+                                ss_ov_smooth = uniform_filter1d(ss_ov_smooth, size=self.smoothing_params['window'])
+                            elif method == 'gaussian':
+                                from scipy.ndimage import gaussian_filter1d
+                                ss_ov_smooth = gaussian_filter1d(ss_ov_smooth, sigma=self.smoothing_params['sigma'])
+                            elif method == 'savgol':
+                                from scipy.signal import savgol_filter
+                                w = self.smoothing_params['window']
+                                p = self.smoothing_params['polyorder']
+                                if len(ss_ov_smooth) > w:
+                                    ss_ov_smooth = savgol_filter(ss_ov_smooth, window_length=w, polyorder=p)
+                        except Exception:
+                            pass
+
+                        if display_name not in self.overlay_spectrum_curves_smooth:
+                            c_s = pg.PlotDataItem([], [], stepMode="center", pen=curve_color, name=display_name)
+                            self.overlay_spectrum_curves_smooth[display_name] = c_s
+                            self.plot_widget_smooth.addItem(c_s)
+                        self.overlay_spectrum_curves_smooth[display_name].setPen(curve_color)
+                        self.overlay_spectrum_curves_smooth[display_name].setData(x=ve, y=ss_ov_smooth)
+        else:
+            self._clear_all_overlay_spectrum_curves()
+
+        self._cleanup_removed_overlay_curves()
+
+        self.plot_widget.autoRange()
+        if hasattr(self, 'plot_widget_smooth'):
+            self.plot_widget_smooth.autoRange()
+
         # Update legends
+        has_overlay = bool(self.contour_overlays)
+        base_prefix = "Base: " if has_overlay else ""
+
         if getattr(self.plot_widget, 'plotItem', None) is not None and self.plot_widget.plotItem.legend is not None:
             self.plot_widget.plotItem.legend.clear()
             if "Whole Map" in active_names:
-                self.plot_widget.plotItem.legend.addItem(self.spectrum_curve, "Whole Map")
+                self.plot_widget.plotItem.legend.addItem(self.spectrum_curve, f"{base_prefix}Whole Map")
             for n, c in self.spectrum_curves.items():
-                self.plot_widget.plotItem.legend.addItem(c, n)
-                
+                self.plot_widget.plotItem.legend.addItem(c, f"{base_prefix}{n}")
+            for n, c in self.overlay_spectrum_curves.items():
+                clean_name = n.replace(" (overlay)", "")
+                self.plot_widget.plotItem.legend.addItem(c, f"Overlay: {clean_name}")
+
         if getattr(self, 'plot_widget_smooth', None) is not None and self.plot_widget_smooth.plotItem.legend is not None:
             self.plot_widget_smooth.plotItem.legend.clear()
             if "Whole Map" in active_names:
-                self.plot_widget_smooth.plotItem.legend.addItem(self.spectrum_curve_smooth, "Whole Map")
+                self.plot_widget_smooth.plotItem.legend.addItem(self.spectrum_curve_smooth, f"{base_prefix}Whole Map")
             for n, c_s in getattr(self, 'spectrum_curves_smooth', {}).items():
-                self.plot_widget_smooth.plotItem.legend.addItem(c_s, n)
+                self.plot_widget_smooth.plotItem.legend.addItem(c_s, f"{base_prefix}{n}")
+            for n, c_s in getattr(self, 'overlay_spectrum_curves_smooth', {}).items():
+                clean_name = n.replace(" (overlay)", "")
+                self.plot_widget_smooth.plotItem.legend.addItem(c_s, f"Overlay: {clean_name}")
 
         if self.catalog_overlay_items:
             ymax = ymax_global if ymax_global != -np.inf else 1.0
             for item in self.catalog_overlay_items:
                 if isinstance(item, pg.TextItem):
                     item.setPos(item.pos().x(), ymax)
+
+    def _cleanup_removed_overlay_curves(self):
+        active_names = set()
+        for ov in self.contour_overlays:
+            if not ov['is_static'] and ov['v_axis'] is not None:
+                active_names.add(f"{ov['name']} (overlay)")
+        for name in list(self.overlay_spectrum_curves.keys()):
+            if name not in active_names:
+                c = self.overlay_spectrum_curves.pop(name)
+                if c.scene():
+                    c.scene().removeItem(c)
+                else:
+                    self.plot_widget.removeItem(c)
+        for name in list(self.overlay_spectrum_curves_smooth.keys()):
+            if name not in active_names:
+                c = self.overlay_spectrum_curves_smooth.pop(name)
+                if c.scene():
+                    c.scene().removeItem(c)
+                else:
+                    self.plot_widget_smooth.removeItem(c)
+
+    def _clear_all_overlay_spectrum_curves(self):
+        for name in list(self.overlay_spectrum_curves.keys()):
+            c = self.overlay_spectrum_curves.pop(name)
+            if c.scene():
+                c.scene().removeItem(c)
+            else:
+                self.plot_widget.removeItem(c)
+        for name in list(self.overlay_spectrum_curves_smooth.keys()):
+            c = self.overlay_spectrum_curves_smooth.pop(name)
+            if c.scene():
+                c.scene().removeItem(c)
+            else:
+                self.plot_widget_smooth.removeItem(c)
 
     def update_text_from_region(self):
         if self.cube_clean is None: return
@@ -3853,6 +4406,82 @@ class ExplorerTab(QWidget):
                     stats_lines.append(f"&nbsp;&nbsp;Std. Dev.: <b>{val:.4f}</b> {unit}")
 
             results_html.append("<br>".join(stats_lines))
+
+        if len(apertures_to_calc) <= 1 and self.contour_overlays:
+            aperture_roi = apertures_to_calc[0]["roi"]
+            for ov in self.contour_overlays:
+                if ov['is_static'] or ov['v_axis'] is None:
+                    continue
+                ov_name = ov['name']
+                ov_color = ov['options']['color']
+                ov_unit = getattr(self, 'display_unit', '')
+
+                if aperture_roi is None:
+                    ov_sub_data = ov['cube']
+                else:
+                    ov_sub_data = aperture_roi.getArrayRegion(ov['cube'], self.view_channel.getImageItem(), axes=(1, 2))
+
+                if "Max" in self.combo_spec_stat.currentText():
+                    ov_spec = np.nanmax(ov_sub_data, axis=(1, 2))
+                elif "Sum" in self.combo_spec_stat.currentText():
+                    ov_spec = np.nansum(ov_sub_data, axis=(1, 2))
+                else:
+                    ov_spec = np.nanmean(ov_sub_data, axis=(1, 2))
+
+                ov_v = ov['v_axis']
+                ov_sort = np.argsort(ov_v)
+                ov_vs, ov_ss = ov_v[ov_sort], ov_spec[ov_sort]
+
+                ov_combined_mask = np.zeros_like(ov_vs, dtype=bool)
+                for roi in selected_rois_1d:
+                    pos = roi.pos(); size = roi.size()
+                    min_v, max_v = pos.x(), pos.x() + size.x()
+                    if min_v > max_v: min_v, max_v = max_v, min_v
+                    ov_combined_mask |= (ov_vs >= min_v) & (ov_vs <= max_v)
+
+                ov_valid_flux = ov_ss[ov_combined_mask]
+                if len(ov_valid_flux) == 0:
+                    continue
+
+                ov_dv = abs(ov_vs[1] - ov_vs[0]) if len(ov_vs) > 1 else 1.0
+                ov_valid_v = ov_vs[ov_combined_mask]
+
+                ov_stats_lines = [f"<b style='color:{ov_color}'>{ov_name} (overlay)</b>"]
+                for calc in calc_types:
+                    calc = calc.strip()
+                    if calc == "Integrated Intensity":
+                        val = np.nansum(ov_valid_flux) * ov_dv
+                        ov_stats_lines.append(f"&nbsp;&nbsp;Integrated Intensity: <b>{val:.4f}</b> {ov_unit} km/s")
+                    elif calc == "RMS":
+                        val = np.sqrt(np.nanmean(ov_valid_flux**2))
+                        ov_stats_lines.append(f"&nbsp;&nbsp;RMS: <b>{val:.4f}</b> {ov_unit}")
+                    elif calc == "Peak (Max)":
+                        val = np.nanmax(ov_valid_flux)
+                        vpeak = ov_valid_v[np.nanargmax(ov_valid_flux)]
+                        ov_stats_lines.append(f"&nbsp;&nbsp;Peak: <b>{val:.4f}</b> {ov_unit} @ {vpeak:.2f} km/s")
+                    elif calc == "Min":
+                        val = np.nanmin(ov_valid_flux)
+                        vmin = ov_valid_v[np.nanargmin(ov_valid_flux)]
+                        ov_stats_lines.append(f"&nbsp;&nbsp;Min: <b>{val:.4f}</b> {ov_unit} @ {vmin:.2f} km/s")
+                    elif calc == "Mean":
+                        val = np.nanmean(ov_valid_flux)
+                        ov_stats_lines.append(f"&nbsp;&nbsp;Mean: <b>{val:.4f}</b> {ov_unit}")
+                    elif calc == "Median":
+                        val = np.nanmedian(ov_valid_flux)
+                        ov_stats_lines.append(f"&nbsp;&nbsp;Median: <b>{val:.4f}</b> {ov_unit}")
+                    elif calc == "SNR (Peak/RMS)":
+                        peak = np.nanmax(np.abs(ov_valid_flux))
+                        rms_ov = np.sqrt(np.nanmean(ov_valid_flux**2))
+                        snr = peak / rms_ov if rms_ov > 0 else float('nan')
+                        ov_stats_lines.append(f"&nbsp;&nbsp;SNR: <b>{snr:.2f}</b>")
+                    elif calc == "Sum":
+                        val = np.nansum(ov_valid_flux)
+                        ov_stats_lines.append(f"&nbsp;&nbsp;Sum: <b>{val:.4f}</b> {ov_unit}")
+                    elif calc == "Std. Deviation":
+                        val = np.nanstd(ov_valid_flux)
+                        ov_stats_lines.append(f"&nbsp;&nbsp;Std. Dev.: <b>{val:.4f}</b> {ov_unit}")
+
+                results_html.append("<br>".join(ov_stats_lines))
 
         popup.lbl_result.setText("<br><br>".join(results_html) if results_html else "---")
         self.lbl_region_result.setText("---")
