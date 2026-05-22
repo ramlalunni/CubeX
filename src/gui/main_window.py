@@ -162,7 +162,7 @@ class KinematicExplorerApp(QMainWindow):
         action_clear_spec_regions.triggered.connect(self.clear_spectrum_regions)
         tools_menu.addAction(action_clear_spec_regions)
 
-        cmap_menu = QMenu('Moment Intensity Colormap', self)
+        cmap_menu = QMenu('Colourmap', self)
         for c in ['turbo', 'inferno', 'viridis', 'plasma', 'magma', 'grey']:
             act = QAction(c.capitalize(), self)
             act.triggered.connect(lambda checked, cm=c: self.set_colormap(cm))
@@ -681,7 +681,9 @@ class KinematicExplorerApp(QMainWindow):
     def set_colormap(self, cmap_name):
         self.current_cmap = cmap_name
         tab = self.get_active_tab()
-        if tab and tab.cube_clean is not None: tab.update_moment_maps() 
+        if tab and tab.cube_clean is not None:
+            tab.update_moment_maps()
+            tab.update_channel_map()
 
     def set_theme(self, theme):
         if theme == 'dark':

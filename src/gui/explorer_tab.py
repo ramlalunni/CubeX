@@ -3396,6 +3396,7 @@ class ExplorerTab(QWidget):
         
         slice_data = self.cube_clean[idx]
         self.view_channel.setImage(slice_data, autoLevels=False, levels=getattr(self, 'ch_levels', (0, 1)), autoHistogramRange=True, scale=scale_tup, pos=pos_tup)
+        self.view_channel.ui.histogram.gradient.loadPreset(self.parent_window.current_cmap)
         self.draw_contours('channel', self.view_channel, slice_data)
         self.draw_overlay_contours()
         self.update_spatial_analysis()
@@ -3981,7 +3982,7 @@ class ExplorerTab(QWidget):
             if mtype != 'PV Diagram':
                 self.configure_bottom_panel_axes(p, is_pv=False)
                 p['plot_item'].setTitle('')
-                is_vel = ('Moment 1' in mtype) or ('Moment 9' in mtype)
+                is_vel = ('Moment 1' in mtype) or ('Moment 2' in mtype) or ('Moment 9' in mtype)
                 self.apply_cmap(p['view'], is_vel)
 
         # ---- Extract ROI world-coordinates for PV panels ----------------
