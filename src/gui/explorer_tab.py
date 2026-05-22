@@ -11,7 +11,7 @@ from PyQt5.QtGui import QPainterPath
 from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
                              QPushButton, QFileDialog, QMessageBox, QLineEdit, 
                              QComboBox, QFrame, QStackedWidget, QSizePolicy, QTabWidget,
-                             QGroupBox, QCheckBox, QDialog, QScrollArea, QGridLayout)
+                             QGroupBox, QCheckBox, QDialog, QScrollArea, QGridLayout, QStyle)
 
 try:
     from PyQt5.QtWidgets import FlowLayout
@@ -868,6 +868,8 @@ class ExplorerTab(QWidget):
         spatial_controls_layout = QHBoxLayout()
         self.lbl_spatial_region_sel = QLabel("Select Region:")
         self.combo_spatial_regions = QComboBox()
+        self.combo_spatial_regions.setSizeAdjustPolicy(QComboBox.AdjustToContents)
+        self.combo_spatial_regions.setMinimumContentsLength(14)
         self.combo_spatial_regions.addItem("None")
         self.combo_spatial_regions.currentTextChanged.connect(self.on_spatial_region_selected)
         
@@ -1150,7 +1152,10 @@ class ExplorerTab(QWidget):
             combo_pv_range.setMinimumContentsLength(9)
             combo_pv_range.setFixedWidth(98)
             pv_controls_layout.addWidget(combo_pv_range)
-            btn_delete_pv = QPushButton("Del")
+            btn_delete_pv = QPushButton()
+            trash_icon = self.style().standardIcon(QStyle.SP_TrashIcon)
+            btn_delete_pv.setIcon(trash_icon)
+            btn_delete_pv.setToolTip("Remove PV Diagram Plot")
             btn_delete_pv.setFixedWidth(42)
             pv_controls_layout.addWidget(btn_delete_pv)
 
@@ -1586,15 +1591,55 @@ class ExplorerTab(QWidget):
             self.select_spatial_region(new_roi)
 
     def add_spatial_region(self, roi, tool):
-        name = f"{tool} {len(self.spatial_rois) + 1}"
+        e_count = sum(1 for item in self.spatial_rois if item.get("tool") == "Ellipse")
+        r_count = sum(1 for item in self.spatial_rois if item.get("tool") == "Rectangle")
+        l_count = sum(1 for item in self.spatial_rois if item.get("tool") == "Line")
+        p_count = sum(1 for item in self.spatial_rois if item.get("tool") == "Point")
+        if tool == "Ellipse":
+            label = f"E{e_count + 1}"
+            name = f"Ellipse {e_count + 1}"
+        elif tool == "Rectangle":
+            label = f"R{r_count + 1}"
+            name = f"Rectangle {r_count + 1}"
+        elif tool == "Line":
+            label = f"L{l_count + 1}"
+            name = f"Line {l_count + 1}"
+        elif tool == "Point":
+            label = f"P{p_count + 1}"
+            name = f"Point {p_count + 1}"
+        else:
+            label = None
+            name = f"{tool} {len(self.spatial_rois) + 1}"
+
         self.spatial_rois.append({"name": name, "roi": roi, "tool": tool})
-        
+
         self.combo_spatial_regions.blockSignals(True)
         self.combo_spatial_regions.addItem(name)
         self.combo_spatial_regions.setCurrentText(name)
         self.combo_spatial_regions.blockSignals(False)
-        
+
         roi.sigRegionChanged.connect(self.update_spatial_analysis)
+
+        if label is not None:
+            text_item = pg.TextItem(text=label, color=(255, 255, 255, 200), anchor=(0, 1))
+            text_item.setZValue(30)
+            self.plot_channel.addItem(text_item)
+
+            def update_spatial_label(r=roi, t=text_item):
+                try:
+                    pos = r.pos()
+                    size = r.size()
+                    max_x = max(pos.x(), pos.x() + size.x())
+                    max_y = max(pos.y(), pos.y() + size.y())
+                    t.setPos(max_x, max_y)
+                except Exception:
+                    pass
+
+            roi.sigRegionChanged.connect(update_spatial_label)
+            update_spatial_label()
+            active_item = self.spatial_rois[-1]
+            active_item["text_item"] = text_item
+            active_item["update_spatial_label"] = update_spatial_label
         
         if tool == "Line":
             direction_item = pg.PlotDataItem(
@@ -1704,26 +1749,66 @@ class ExplorerTab(QWidget):
                             item["roi"].sigRegionChanged.disconnect(item["update_spatial_arrow"])
                         except Exception:
                             pass
+                    ti = item.get("text_item")
+                    if ti is not None:
+                        try:
+                            self.plot_channel.removeItem(ti)
+                        except Exception:
+                            pass
+                    if "update_spatial_label" in item and item["roi"] is not None:
+                        try:
+                            item["roi"].sigRegionChanged.disconnect(item["update_spatial_label"])
+                        except Exception:
+                            pass
                     break
 
             if roi.scene():
                 roi.scene().removeItem(roi)
             else:
                 try:
-                    self.view_channel.removeItem(roi)
+                    self.view_channel.getView().removeItem(roi)
                 except:
                     pass
             
             self.spatial_rois = [item for item in self.spatial_rois if item["roi"] != roi]
         self.spatial_rois_to_delete.clear()
-        
+
+        e_idx = 0
+        r_idx = 0
+        l_idx = 0
+        p_idx = 0
+        for item in self.spatial_rois:
+            tool = item.get("tool", "")
+            if tool == "Ellipse":
+                e_idx += 1
+                new_label = f"E{e_idx}"
+                new_name = f"Ellipse {e_idx}"
+            elif tool == "Rectangle":
+                r_idx += 1
+                new_label = f"R{r_idx}"
+                new_name = f"Rectangle {r_idx}"
+            elif tool == "Line":
+                l_idx += 1
+                new_label = f"L{l_idx}"
+                new_name = f"Line {l_idx}"
+            elif tool == "Point":
+                p_idx += 1
+                new_label = f"P{p_idx}"
+                new_name = f"Point {p_idx}"
+            else:
+                continue
+            item["name"] = new_name
+            ti = item.get("text_item")
+            if ti is not None:
+                ti.setText(new_label)
+
         self.combo_spatial_regions.blockSignals(True)
         self.combo_spatial_regions.clear()
         self.combo_spatial_regions.addItem("None")
         for item in self.spatial_rois:
             self.combo_spatial_regions.addItem(item["name"])
         self.combo_spatial_regions.blockSignals(False)
-        
+
         if self.spatial_rois:
             self.combo_spatial_regions.setCurrentText(self.spatial_rois[-1]["name"])
         else:
@@ -1812,7 +1897,7 @@ class ExplorerTab(QWidget):
                 roi.scene().removeItem(roi)
             else:
                 try:
-                    self.view_channel.removeItem(roi)
+                    self.view_channel.getView().removeItem(roi)
                 except Exception:
                     pass
 
@@ -2485,30 +2570,152 @@ class ExplorerTab(QWidget):
         self.raw_header = None
         self.wcs_2d = None
         self.rest_freq_hz = None
-        self.view_channel.clear()
-        self.spectrum_curve.setData([], [])
-        for roi_info in getattr(self, 'spatial_rois', []):
-            try:
-                self.view_channel.removeItem(roi_info['roi'])
-            except:
-                pass
+
+        for item in getattr(self, 'spatial_rois', []):
+            di = item.get("direction_item")
+            if di is not None:
+                try:
+                    dscene = di.scene()
+                    if dscene is not None: dscene.removeItem(di)
+                    else: self.plot_channel.removeItem(di)
+                except Exception: pass
+                di.setData([], [])
+            if "update_spatial_arrow" in item and item.get("roi") is not None:
+                try: item["roi"].sigRegionChanged.disconnect(item["update_spatial_arrow"])
+                except Exception: pass
+            ti = item.get("text_item")
+            if ti is not None:
+                try:
+                    tscene = ti.scene()
+                    if tscene is not None: tscene.removeItem(ti)
+                    else: self.plot_channel.removeItem(ti)
+                except Exception: pass
+            if "update_spatial_label" in item and item.get("roi") is not None:
+                try: item["roi"].sigRegionChanged.disconnect(item["update_spatial_label"])
+                except Exception: pass
+            roi = item['roi']
+            try: roi.sigRegionChanged.disconnect()
+            except Exception: pass
+            s = roi.scene()
+            if s is not None:
+                try: s.removeItem(roi)
+                except Exception: pass
         self.spatial_rois = []
         self.spatial_rois_to_delete = []
-        for cut_info in getattr(self, 'pv_cuts', []):
+        self.combo_spatial_regions.blockSignals(True)
+        self.combo_spatial_regions.clear()
+        self.combo_spatial_regions.addItem("None")
+        self.combo_spatial_regions.blockSignals(False)
+
+        for r_dict in list(getattr(self, 'spectrum_spatial_rois', [])):
+            roi = r_dict["roi"]
             try:
-                self.view_channel.removeItem(cut_info['roi'])
+                if roi.scene():
+                    roi.scene().removeItem(roi)
+                else:
+                    self.view_channel.getView().removeItem(roi)
+            except Exception: pass
+            cb = r_dict.get("checkbox")
+            if cb is not None:
+                try: self.box_regions_layout.removeWidget(cb)
+                except Exception: pass
+                cb.deleteLater()
+            name = r_dict.get("name", "")
+            if name in getattr(self, 'spectrum_curves', {}):
+                c = self.spectrum_curves.pop(name)
+                try:
+                    if c.scene(): c.scene().removeItem(c)
+                    else: self.plot_widget.removeItem(c)
+                except Exception: pass
+            if name in getattr(self, 'spectrum_curves_smooth', {}):
+                c = self.spectrum_curves_smooth.pop(name)
+                try:
+                    if c.scene(): c.scene().removeItem(c)
+                    else: self.plot_widget_smooth.removeItem(c)
+                except Exception: pass
+        self.spectrum_spatial_rois = []
+
+        active_rois = getattr(self, 'get_active_spectrum_rois', lambda: [])()
+        for item in list(active_rois):
+            roi = item["roi"]
+            try:
+                if roi.scene(): roi.scene().removeItem(roi)
+                else: self.plot_widget.removeItem(roi)
+            except Exception: pass
+            ti = item.get("text_item")
+            if ti is not None:
+                try:
+                    if ti.scene(): ti.scene().removeItem(ti)
+                    else: self.plot_widget.removeItem(ti)
+                except Exception: pass
+        if hasattr(self, '_spectrum_regions'):
+            self._spectrum_regions = []
+        self.rois_to_delete.clear()
+
+        self.combo_regions.blockSignals(True)
+        self.combo_regions_2.blockSignals(True)
+        self.combo_regions_3.blockSignals(True)
+        self.combo_regions.clear()
+        self.combo_regions_2.clear()
+        self.combo_regions_3.clear()
+        self.combo_regions.addItem("None")
+        self.combo_regions_2.addItem("None")
+        self.combo_regions_3.addItem("None")
+        self.combo_regions.blockSignals(False)
+        self.combo_regions_2.blockSignals(False)
+        self.combo_regions_3.blockSignals(False)
+
+        for name in list(getattr(self, 'spectrum_curves', {}).keys()):
+            c = self.spectrum_curves.pop(name)
+            try:
+                if c.scene(): c.scene().removeItem(c)
+                else: self.plot_widget.removeItem(c)
+            except Exception: pass
+        for name in list(getattr(self, 'spectrum_curves_smooth', {}).keys()):
+            c = self.spectrum_curves_smooth.pop(name)
+            try:
+                if c.scene(): c.scene().removeItem(c)
+                else: self.plot_widget_smooth.removeItem(c)
+            except Exception: pass
+
+        for cut_info in list(getattr(self, 'pv_cuts', [])):
+            roi = cut_info['roi']
+            try:
+                roi.removeHandle(0)
             except Exception:
                 pass
+            try:
+                roi.removeHandle(1)
+            except Exception:
+                pass
+            try:
+                roi.sigRegionChanged.disconnect()
+            except Exception:
+                pass
+            s = roi.scene()
+            if s is not None:
+                try:
+                    s.removeItem(roi)
+                except Exception:
+                    pass
             text_item = cut_info.get('text_item')
             if text_item is not None:
                 try:
-                    self.plot_channel.removeItem(text_item)
+                    tscene = text_item.scene()
+                    if tscene is not None:
+                        tscene.removeItem(text_item)
+                    else:
+                        self.plot_channel.removeItem(text_item)
                 except Exception:
                     pass
             direction_item = cut_info.get('direction_item')
             if direction_item is not None:
                 try:
-                    self.plot_channel.removeItem(direction_item)
+                    dscene = direction_item.scene()
+                    if dscene is not None:
+                        dscene.removeItem(direction_item)
+                    else:
+                        self.plot_channel.removeItem(direction_item)
                 except Exception:
                     pass
         self.pv_cuts = []
@@ -2523,13 +2730,28 @@ class ExplorerTab(QWidget):
             self.combo_pv_cuts.clear()
             self.combo_pv_cuts.addItem("None")
             self.combo_pv_cuts.blockSignals(False)
+
         if hasattr(self, 'curve_spatial_1'):
             self.curve_spatial_1.setData([], [])
             self.curve_spatial_2.setData([], [])
             self.stacked_spatial_info.setCurrentIndex(0)
+            self.spatial_stats_scroll.hide()
             self.lbl_spatial_stats.setText("Draw a region to see statistics.")
+
+        self.lbl_region_result.setText("---")
+
+        self.view_channel.clear()
+        self.view_channel.getView().clear()
+        self.spectrum_curve.setData([], [])
+        if hasattr(self, 'spectrum_curve_smooth'):
+            self.spectrum_curve_smooth.setData([], [])
+        self.plot_widget.setLabel('left', 'Flux')
+        if hasattr(self, 'plot_widget_smooth'):
+            self.plot_widget_smooth.setLabel('left', 'Flux')
+
         self.v_line.hide()
         self.region.hide()
+
         for p in self.panels:
             p['combo_pv_cut'].blockSignals(True)
             p['combo_pv_cut'].clear()
@@ -2540,6 +2762,7 @@ class ExplorerTab(QWidget):
             p['pv_offset_axis'] = None
             p['pv_velocity_axis'] = None
             p['view'].clear()
+
         self.clear_all_hover_labels()
         self.contour_params = {'channel': None, 0: None, 1: None, 2: None}
         for k in self.active_contours:
@@ -2547,10 +2770,25 @@ class ExplorerTab(QWidget):
             self.active_contours[k] = []
         self.clear_catalog_lines()
         self._clear_overlay_contours()
+        for name in list(self.overlay_spectrum_curves.keys()):
+            c = self.overlay_spectrum_curves.pop(name)
+            try:
+                if c.scene(): c.scene().removeItem(c)
+                else: self.plot_widget.removeItem(c)
+            except Exception: pass
+        for name in list(self.overlay_spectrum_curves_smooth.keys()):
+            c = self.overlay_spectrum_curves_smooth.pop(name)
+            try:
+                if c.scene(): c.scene().removeItem(c)
+                else: self.plot_widget_smooth.removeItem(c)
+            except Exception: pass
         self.contour_overlays = []
-        self.overlay_spectrum_curves = {}
-        self.overlay_spectrum_curves_smooth = {}
         self._clear_all_overlay_spatial_curves()
+        self.plot_channel.clear()
+        if hasattr(self.plot_widget, 'plotItem') and self.plot_widget.plotItem.legend is not None:
+            self.plot_widget.plotItem.legend.clear()
+        if hasattr(self, 'plot_widget_smooth') and hasattr(self.plot_widget_smooth, 'plotItem') and self.plot_widget_smooth.plotItem.legend is not None:
+            self.plot_widget_smooth.plotItem.legend.clear()
         self.btn_contour_overlay.setEnabled(False)
         self.btn_contour_overlay.hide()
         self.parent_window.update_menu_states()
@@ -3118,16 +3356,31 @@ class ExplorerTab(QWidget):
         params = self.contour_params.get(target_id)
         if not params or data is None or np.isnan(data).all(): return
 
-        if params['mode'] == 'auto':
-            valid = data[~np.isnan(data) & ~np.isinf(data)]
-            if len(valid) == 0: return
-            min_v, max_v = np.nanmin(valid), np.nanmax(valid)
-            levels = np.linspace(min_v, max_v, params['n'] + 2)[1:-1]
-        else:
-            levels = params['levels']
+        smoothed = data
+        if params.get('smooth', False):
+            k = int(params.get('smooth_kernel', 3))
+            if k % 2 == 0: k += 1
+            from scipy.ndimage import gaussian_filter
+            smoothed = gaussian_filter(np.where(np.isfinite(data), data, 0.0).astype(np.float64), sigma=k / 2.355)
+            smooth_mask = gaussian_filter(np.isfinite(data).astype(np.float64), sigma=k / 2.355)
+            mask = smooth_mask > 0.01
+            smoothed = np.where(mask, smoothed / np.where(mask, smooth_mask, 1.0), np.nan)
+
+        levels = self._compute_contour_levels(smoothed, params)
+        if not levels:
+            return
+
+        color_name = params.get('color', 'cyan').lower()
+        qcolor = pg.mkColor(color_name)
+        if not qcolor.isValid():
+            qcolor = pg.mkColor('c')
+        lw = float(params.get('line_width', 1.5))
+        style_name = params.get('line_style', 'solid')
+        style = ContourDialog._LINE_STYLES.get(style_name.capitalize(), Qt.SolidLine)
+        pen = pg.mkPen(qcolor, width=lw, style=style)
 
         for lvl in levels:
-            iso = pg.IsocurveItem(data=data, level=lvl, pen=pg.mkPen('#2ecc71', width=1.5))
+            iso = pg.IsocurveItem(data=smoothed, level=lvl, pen=pen)
             iso.setParentItem(view.getImageItem())
             iso.setZValue(10)
             self.active_contours[target_id].append(iso)
@@ -3313,7 +3566,7 @@ class ExplorerTab(QWidget):
                 if roi.scene():
                     roi.scene().removeItem(roi)
                 else:
-                    self.view_channel.removeItem(roi)
+                    self.view_channel.getView().removeItem(roi)
                 # Remove checkbox
                 cb = r_dict["checkbox"]
                 self.box_regions_layout.removeWidget(cb)

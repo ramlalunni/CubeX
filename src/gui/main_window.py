@@ -669,17 +669,10 @@ class KinematicExplorerApp(QMainWindow):
         else:
             name = f"Bottom Panel {target_id + 1} ({tab.panels[target_id]['combo'].currentText()})"
 
-        dlg = ContourDialog(self, tab.contour_params.get(target_id), f"Contours - {name}")
-        if dlg.exec_():
-            if dlg.action == 'clear':
-                tab.contour_params[target_id] = None
-            elif dlg.action == 'apply':
-                tab.contour_params[target_id] = dlg.result_params
-
-            if target_id == 'channel':
-                tab.update_channel_map()
-            else:
-                tab.update_moment_maps()
+        dlg = ContourDialog(self, tab.contour_params.get(target_id), f"Contours - {name}",
+                            target_tab=tab, target_id=target_id)
+        dlg.setAttribute(Qt.WA_DeleteOnClose, True)
+        dlg.show()
 
     def open_line_catalog(self):
         tab = self.get_active_tab()
