@@ -2,7 +2,7 @@ import types
 import pyqtgraph as pg
 import astropy.units as u
 from PyQt5.QtCore import Qt
-from PyQt5.QtWidgets import QSlider, QStyle, QStyleOptionSlider
+from PyQt5.QtWidgets import QSlider, QStyleOptionSlider
 
 # ==============================================================================
 # CUSTOM SLIDER

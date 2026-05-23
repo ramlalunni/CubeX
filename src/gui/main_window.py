@@ -6,6 +6,7 @@ from astropy.io import fits
 import pyqtgraph as pg
 
 from PyQt5.QtCore import Qt
+from PyQt5.QtGui import QFont
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QAction, QTabWidget, 
                              QFileDialog, QMessageBox, QMenu, QDialog, QDesktopWidget,
                              QVBoxLayout, QHBoxLayout, QTextEdit, QCheckBox, QPushButton, QLabel)
@@ -72,6 +73,20 @@ class KinematicExplorerApp(QMainWindow):
         self.tabs.tabCloseRequested.connect(self.close_tab)
         self.tabs.currentChanged.connect(self.update_menu_states)
         self.setCentralWidget(self.tabs)
+
+        btn_new_tab = QPushButton("+")
+        #btn_new_tab.setFixedSize(28, 24)
+        btn_new_tab.setFixedWidth(40)
+        btn_new_tab.setToolTip("New Tab")
+        font = QFont("Segoe UI Symbol")  # Good option on Windows
+        btn_new_tab.setFont(font)
+        btn_new_tab.setStyleSheet("QPushButton { font-size: 16px; font-weight: bold; "
+                                  "border: 1px solid #444; border-radius: 4px; "
+                                  "background-color: #2a2a2a; color: #aaa; } "
+                                  "QPushButton:hover { background-color: #3a3a3a; color: #fff; "
+                                  "border-color: #666; }")
+        btn_new_tab.clicked.connect(self.add_new_tab)
+        self.tabs.setCornerWidget(btn_new_tab, Qt.TopRightCorner)
         
         self.statusBar().showMessage("Ready.")
         self.init_menu()

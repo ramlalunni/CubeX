@@ -865,12 +865,11 @@ class RegionPropertiesDialog(QDialog):
                 old_name = self.roi_dict["name"]
                 if new_name != old_name:
                     self.roi_dict["name"] = new_name
-                    
-                    # Update Checkbox if it exists (Spectrum ROIs)
+                    is_pv_cut = (self.roi_dict.get("tool") == "PV Cut")
+
                     if "checkbox" in self.roi_dict:
                         self.roi_dict["checkbox"].setText(new_name)
-                    
-                    # Update Dropdown if it exists (Spatial ROIs)
+
                     if hasattr(self.tab, 'combo_spatial_regions'):
                         idx = self.tab.combo_spatial_regions.findText(old_name)
                         if idx >= 0:
@@ -884,14 +883,16 @@ class RegionPropertiesDialog(QDialog):
                         self.tab.spectrum_curves_smooth[new_name] = self.tab.spectrum_curves_smooth.pop(old_name)
                         if hasattr(self.tab.spectrum_curves_smooth[new_name], 'opts'):
                             self.tab.spectrum_curves_smooth[new_name].opts['name'] = new_name
-                    
+
                     if "text_item" in self.roi_dict:
                         self.roi_dict["text_item"].setText(new_name)
-                        
-                    self.tab.update_spectrum()
-                    self.tab.update_spectrum_region_calc()
-                    # Refresh spectral statistics popup if open
-                    self.tab.refresh_spectral_stats_apertures()
+
+                    if is_pv_cut:
+                        self.tab.refresh_all_pv_cut_combos()
+                    else:
+                        self.tab.update_spectrum()
+                        self.tab.update_spectrum_region_calc()
+                        self.tab.refresh_spectral_stats_apertures()
 
     def apply_to_line(self):
         if self._updating: return

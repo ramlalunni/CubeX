@@ -12,7 +12,7 @@ from PyQt5.QtGui import QPainterPath
 from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
                              QPushButton, QMessageBox, QLineEdit, 
                              QComboBox, QFrame, QStackedWidget, QSizePolicy, QTabWidget,
-                             QGroupBox, QCheckBox, QDialog, QScrollArea, QGridLayout, QStyle)
+                             QGroupBox, QCheckBox, QDialog, QScrollArea, QGridLayout)
 
 try:
     from PyQt5.QtWidgets import FlowLayout
@@ -26,6 +26,8 @@ try:
     _NUMBA_AVAILABLE = True
 except ImportError:
     _NUMBA_AVAILABLE = False
+
+import qtawesome as qta
 
 # Import our modularized components
 from src.core.splatalogue import SplatalogueWorker
@@ -707,6 +709,7 @@ class ExplorerTab(QWidget):
         # Background worker for moment / PV computation
         self._moment_worker = None
         self._moment_generation = 0
+        self._pending_workers = []
 
         self.initUI()
 
@@ -936,10 +939,15 @@ class ExplorerTab(QWidget):
         self.combo_pv_cuts = QComboBox()
         self.combo_pv_cuts.addItem("None")
         self.combo_pv_cuts.currentTextChanged.connect(self.on_pv_cut_selected)
+        self.btn_edit_pv = QPushButton("Edit")
+        self.btn_edit_pv.setFixedHeight(22)
+        self.btn_edit_pv.setStyleSheet("font-size: 11px; padding: 0px 4px;")
+        self.btn_edit_pv.clicked.connect(self.open_edit_pv_cut_dialog)
         self.btn_delete_pv = QPushButton("Delete Selected")
         self.btn_delete_pv.clicked.connect(self.delete_selected_pv_via_button)
         pv_controls_layout.addWidget(self.lbl_pv_cut_sel)
         pv_controls_layout.addWidget(self.combo_pv_cuts)
+        pv_controls_layout.addWidget(self.btn_edit_pv)
         pv_controls_layout.addWidget(self.btn_delete_pv)
         pv_controls_layout.addStretch()
         pv_layout.addLayout(pv_controls_layout)
@@ -1115,8 +1123,8 @@ class ExplorerTab(QWidget):
             combo = QComboBox()
             combo.addItems(moment_options)
             combo.setCurrentText(default_option)
-            combo.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
-            combo.setMinimumContentsLength(14)
+            combo.setSizeAdjustPolicy(QComboBox.AdjustToContents)
+            combo.setMinimumContentsLength(10)
             top_ctrl_layout.addWidget(combo, stretch=1)
             
             aux_stack = QStackedWidget()
@@ -1153,17 +1161,25 @@ class ExplorerTab(QWidget):
             pv_controls_layout.addWidget(combo_pv_cut, stretch=1)
             pv_controls_layout.addWidget(QLabel("Range:"))
             combo_pv_range = QComboBox()
-            combo_pv_range.addItems(["Selected Range", "Full Cube"])
-            combo_pv_range.setCurrentText("Selected Range")
+            combo_pv_range.addItems(["Selected", "Full Cube"])
+            combo_pv_range.setCurrentText("Selected")
             combo_pv_range.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
             combo_pv_range.setMinimumContentsLength(9)
             combo_pv_range.setFixedWidth(98)
             pv_controls_layout.addWidget(combo_pv_range)
+            btn_edit_pv = QPushButton()
+            edit_icon = qta.icon('fa5s.pen')  # Creates a solid pencil icon
+            btn_edit_pv.setIcon(edit_icon)
+            btn_edit_pv.setToolTip("Edit PV cut")
+            btn_edit_pv.setFixedHeight(22)
+            btn_edit_pv.setStyleSheet("font-size: 11px; padding: 0px 4px;")
+            pv_controls_layout.addWidget(btn_edit_pv)
             btn_delete_pv = QPushButton()
-            trash_icon = self.style().standardIcon(QStyle.SP_TrashIcon)
+            trash_icon = qta.icon('mdi.trash-can-outline')
             btn_delete_pv.setIcon(trash_icon)
             btn_delete_pv.setToolTip("Remove PV Diagram Plot")
-            btn_delete_pv.setFixedWidth(42)
+            btn_delete_pv.setFixedWidth(30)
+            btn_delete_pv.setFixedHeight(22)
             pv_controls_layout.addWidget(btn_delete_pv)
 
             aux_stack.addWidget(thresh_widget)
@@ -1184,7 +1200,8 @@ class ExplorerTab(QWidget):
 
             view.ui.roiBtn.hide()
             view.ui.menuBtn.hide()
-            view.ui.histogram.setFixedWidth(160) 
+            view.ui.histogram.setMaximumWidth(160)
+            view.ui.histogram.setMinimumWidth(80)
             fix_axis_scaling(view.ui.histogram.axis) 
             panel_layout.addWidget(view, stretch=1)
             
@@ -1205,6 +1222,7 @@ class ExplorerTab(QWidget):
             panel['pv_controls_widget'] = pv_controls_widget
             panel['combo_pv_cut'] = combo_pv_cut
             panel['combo_pv_range'] = combo_pv_range
+            panel['btn_edit_pv'] = btn_edit_pv
             panel['btn_delete_pv'] = btn_delete_pv
             panel['lbl_hover'] = lbl_hover
             panel['current_data'] = None
@@ -1219,6 +1237,7 @@ class ExplorerTab(QWidget):
             combo_pv_cut.currentTextChanged.connect(lambda _text, p_id=i: self.on_panel_pv_cut_selected(p_id))
             combo_pv_range.currentTextChanged.connect(self.update_moment_maps)
             btn_delete_pv.clicked.connect(lambda _checked=False, p_id=i: self.delete_panel_pv_cut(p_id))
+            btn_edit_pv.clicked.connect(self.open_edit_pv_cut_dialog)
             plot_item.scene().sigMouseMoved.connect(lambda pos, p=panel: self.hover_panel(pos, p))
             btn_pick.clicked.connect(lambda checked, p_id=i: self.set_active_picker(checked, p_id))
 
@@ -1883,6 +1902,24 @@ class ExplorerTab(QWidget):
     def on_pv_cut_selected(self, name):
         self.set_selected_pv_cut(name)
         self.update_moment_maps()
+
+    def open_edit_pv_cut_dialog(self):
+        if not self.pv_cuts_to_delete:
+            return
+        selected_roi = self.pv_cuts_to_delete[-1]
+        cut_dict = next((item for item in self.pv_cuts if item["roi"] == selected_roi), None)
+        if cut_dict is None:
+            return
+        from src.gui.dialogs import RegionPropertiesDialog
+        if getattr(self, '_pv_edit_dialog', None) and self._pv_edit_dialog.isVisible():
+            self._pv_edit_dialog.raise_()
+            self._pv_edit_dialog.activateWindow()
+            return
+        roi_dict = {"name": cut_dict["name"], "roi": cut_dict["roi"], "tool": "PV Cut",
+                     "text_item": cut_dict.get("text_item")}
+        dlg = RegionPropertiesDialog(cut_dict["roi"], self, parent=self.window(), roi_dict=roi_dict)
+        self._pv_edit_dialog = dlg
+        dlg.show()
 
     def select_pv_cut(self, roi):
         for item in self.pv_cuts:
@@ -4022,6 +4059,13 @@ class ExplorerTab(QWidget):
         # ---- Cancel any in-flight worker --------------------------------
         if self._moment_worker is not None and self._moment_worker.isRunning():
             self._moment_worker.cancel()
+            try:
+                self._moment_worker.result_ready.disconnect(self._on_moment_result)
+            except TypeError:
+                pass
+            self._moment_worker.finished.connect(self._moment_worker.deleteLater)
+            self._pending_workers.append(self._moment_worker)
+        self._purge_finished_workers()
         self._moment_generation += 1
         current_gen = self._moment_generation
 
@@ -4079,6 +4123,16 @@ class ExplorerTab(QWidget):
         self._moment_worker = MomentWorker(worker_params, current_gen)
         self._moment_worker.result_ready.connect(self._on_moment_result)
         self._moment_worker.start()
+
+    def _purge_finished_workers(self):
+        alive = []
+        for w in self._pending_workers:
+            try:
+                if w.isRunning():
+                    alive.append(w)
+            except RuntimeError:
+                pass
+        self._pending_workers = alive
 
     def _on_moment_result(self, results: dict):
         """Receives computed moment/PV data from MomentWorker and updates the UI.
