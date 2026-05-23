@@ -7,7 +7,7 @@ import pyqtgraph as pg
 
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QAction, QTabWidget, 
-                             QFileDialog, QMessageBox, QMenu, QDialog, 
+                             QFileDialog, QMessageBox, QMenu, QDialog, QDesktopWidget,
                              QVBoxLayout, QHBoxLayout, QTextEdit, QCheckBox, QPushButton, QLabel)
 
 class ExportRegionsDialog(QDialog):
@@ -58,7 +58,12 @@ class KinematicExplorerApp(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("CubeX")
-        self.setGeometry(50, 50, 1600, 950) 
+        screen = QDesktopWidget().availableGeometry()
+        w = min(screen.width(), 1600)
+        h = min(screen.height(), 950)
+        x = max(0, (screen.width() - w) // 2)
+        y = max(0, (screen.height() - h) // 2)
+        self.setGeometry(x, y, w, h)
         self.current_cmap = 'turbo' 
         self.is_absolute_wcs = False 
 
