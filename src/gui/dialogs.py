@@ -614,6 +614,24 @@ class RegionPropertiesDialog(QDialog):
         pa_layout.addWidget(self.edit_pa)
         pa_layout.addStretch()
         layout.addLayout(pa_layout)
+
+        if self.roi_dict and self.roi_dict.get("tool") == "PV Cut":
+            width_layout = QHBoxLayout()
+            width_layout.addWidget(QLabel("Width (pixels):"))
+            self.spin_width = QSpinBox()
+            self.spin_width.setMinimum(1)
+            self.spin_width.setMaximum(101)
+            self.spin_width.setSingleStep(2)
+            self.spin_width.setToolTip("Number of pixels averaged perpendicular to the cut")
+            pv_cut_dict = self.roi_dict.get("pv_cut_dict", {})
+            w_val = pv_cut_dict.get("width", 1)
+            if w_val % 2 == 0:
+                w_val += 1
+            self.spin_width.setValue(w_val)
+            self.spin_width.valueChanged.connect(self.apply_width)
+            width_layout.addWidget(self.spin_width)
+            width_layout.addStretch()
+            layout.addLayout(width_layout)
         
         # Connect editing finished
         self.edit_cx.editingFinished.connect(self.apply_to_roi)
@@ -893,6 +911,20 @@ class RegionPropertiesDialog(QDialog):
                         self.tab.update_spectrum()
                         self.tab.update_spectrum_region_calc()
                         self.tab.refresh_spectral_stats_apertures()
+
+    def apply_width(self, value):
+        if value % 2 == 0:
+            value += 1
+            self.spin_width.blockSignals(True)
+            self.spin_width.setValue(value)
+            self.spin_width.blockSignals(False)
+        pv_cut_dict = self.roi_dict.get("pv_cut_dict")
+        if pv_cut_dict is not None:
+            if pv_cut_dict.get("width") != value:
+                pv_cut_dict["width"] = value
+                if "update_annotations" in pv_cut_dict:
+                    pv_cut_dict["update_annotations"]()
+                self.tab.update_moment_maps()
 
     def apply_to_line(self):
         if self._updating: return

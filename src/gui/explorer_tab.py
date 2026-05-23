@@ -216,6 +216,7 @@ class MomentWorker(QThread):
                 pv_points  = cfg.get('pv_points')
                 pv_cube    = cfg.get('pv_cube')
                 pv_sub_v   = cfg.get('pv_sub_v')
+                pv_width   = cfg.get('pv_width', 1)
 
                 if pv_points is None or pv_cube is None or pv_sub_v is None:
                     panel_results.append({'mtype': mtype, 'data': None})
@@ -223,7 +224,7 @@ class MomentWorker(QThread):
 
                 p1, p2 = pv_points
                 offsets, pv_data = MomentWorker._sample_along_line(
-                    p1, p2, pv_cube, nx, ny, pix_scale
+                    p1, p2, pv_cube, nx, ny, pix_scale, width=pv_width
                 )
                 if offsets is None or pv_data is None or pv_data.size == 0:
                     panel_results.append({'mtype': mtype, 'data': None})
@@ -332,46 +333,74 @@ class MomentWorker(QThread):
 
     # ------------------------------------------------------------------
     @staticmethod
-    def _sample_along_line(p1, p2, cube_data, nx, ny, pix_scale_arcsec):
+    def _sample_along_line(p1, p2, cube_data, nx, ny, pix_scale_arcsec, width=1):
         """
         Pure-NumPy bilinear interpolation along a line through the cube.
         p1, p2 are world-coordinate arrays [x_arcsec, y_arcsec].
-        Returns (offsets, samples.T) exactly as the Qt-dependent
-        sample_cube_along_line does, but with no Qt dependencies.
+        width is the number of pixels averaged perpendicular to the cut
+        (1 = no averaging).
+        Returns (offsets, samples.T).
         """
+        if width < 1:
+            width = 1
+
         dx_w = p2[0] - p1[0]
         dy_w = p2[1] - p1[1]
         length_arcsec = np.hypot(dx_w, dy_w)
         n_samples = max(int(np.ceil(length_arcsec / max(pix_scale_arcsec, 1e-6))) + 1, 2)
 
-        xs = np.linspace(p1[0], p2[0], n_samples)
-        ys = np.linspace(p1[1], p2[1], n_samples)
+        if width == 1:
+            xs = np.linspace(p1[0], p2[0], n_samples)
+            ys = np.linspace(p1[1], p2[1], n_samples)
+            offsets = np.linspace(0.0, length_arcsec, n_samples)
+
+            start_x = (nx / 2) * pix_scale_arcsec
+            start_y = -(ny / 2) * pix_scale_arcsec
+            x_pix = (start_x - xs) / pix_scale_arcsec
+            y_pix = (ys - start_y) / pix_scale_arcsec
+
+            valid = (
+                (x_pix >= 0.0) & (x_pix <= nx - 1) &
+                (y_pix >= 0.0) & (y_pix <= ny - 1)
+            )
+            nv = cube_data.shape[0]
+            samples = np.full((nv, n_samples), np.nan, dtype=np.float64)
+            if np.any(valid):
+                x0 = np.floor(x_pix[valid]).astype(np.int64)
+                y0 = np.floor(y_pix[valid]).astype(np.int64)
+                x1 = np.clip(x0 + 1, 0, nx - 1).astype(np.int64)
+                y1 = np.clip(y0 + 1, 0, ny - 1).astype(np.int64)
+                fx = (x_pix[valid] - x0).astype(np.float64)
+                fy = (y_pix[valid] - y0).astype(np.float64)
+                buf = np.ascontiguousarray(cube_data, dtype=np.float64)
+                out = np.empty((nv, int(valid.sum())), dtype=np.float64)
+                _bilinear_interp(buf, x0, y0, x1, y1, fx, fy, out)
+                samples[:, valid] = out
+            return offsets, samples.T
+
+        all_samples = []
+        offsets_k = np.linspace(-(width - 1) / 2.0, (width - 1) / 2.0, width)
+        for k in offsets_k:
+            off_x = k * pix_scale_arcsec * dy_w / max(length_arcsec, 1e-6)
+            off_y = -k * pix_scale_arcsec * dx_w / max(length_arcsec, 1e-6)
+            off_p1 = np.array([p1[0] + off_x, p1[1] + off_y], dtype=float)
+            off_p2 = np.array([p2[0] + off_x, p2[1] + off_y], dtype=float)
+
+            _, samples = MomentWorker._sample_along_line(
+                off_p1, off_p2, cube_data, nx, ny, pix_scale_arcsec, width=1
+            )
+            if samples is not None:
+                all_samples.append(samples)
+
+        if not all_samples:
+            offsets = np.linspace(0.0, length_arcsec, n_samples)
+            return offsets, np.full((n_samples, cube_data.shape[0]), np.nan, dtype=np.float64)
+
         offsets = np.linspace(0.0, length_arcsec, n_samples)
-
-        # world_to_pixel (inline)
-        start_x = (nx / 2) * pix_scale_arcsec
-        start_y = -(ny / 2) * pix_scale_arcsec
-        x_pix = (start_x - xs) / pix_scale_arcsec
-        y_pix = (ys - start_y) / pix_scale_arcsec
-
-        valid = (
-            (x_pix >= 0.0) & (x_pix <= nx - 1) &
-            (y_pix >= 0.0) & (y_pix <= ny - 1)
-        )
-        nv = cube_data.shape[0]
-        samples = np.full((nv, n_samples), np.nan, dtype=np.float64)
-        if np.any(valid):
-            x0 = np.floor(x_pix[valid]).astype(np.int64)
-            y0 = np.floor(y_pix[valid]).astype(np.int64)
-            x1 = np.clip(x0 + 1, 0, nx - 1).astype(np.int64)
-            y1 = np.clip(y0 + 1, 0, ny - 1).astype(np.int64)
-            fx = (x_pix[valid] - x0).astype(np.float64)
-            fy = (y_pix[valid] - y0).astype(np.float64)
-            buf = np.ascontiguousarray(cube_data, dtype=np.float64)
-            out = np.empty((nv, int(valid.sum())), dtype=np.float64)
-            _bilinear_interp(buf, x0, y0, x1, y1, fx, fy, out)
-            samples[:, valid] = out
-        return offsets, samples.T
+        stacked = np.dstack(all_samples)
+        with np.errstate(all='ignore'):
+            avg = np.nanmean(stacked, axis=2)
+        return offsets, avg
 
 
 # ==============================================================================
@@ -958,6 +987,9 @@ class ExplorerTab(QWidget):
         pv_layout.addWidget(self.lbl_pv_help)
 
         self.pv_plot_item = pg.PlotItem(title="PV Diagram")
+        self.pv_hover_line_main = pg.InfiniteLine(angle=90, movable=False, pen=pg.mkPen('m', width=1.5, style=Qt.DashLine))
+        self.pv_hover_line_main.hide()
+        self.pv_plot_item.addItem(self.pv_hover_line_main)
         self.pv_plot_item.showGrid(x=True, y=True, alpha=0.3)
         self.pv_plot_item.setLabel('bottom', 'Offset along cut (arcsec)')
         self.pv_plot_item.setLabel('left', 'Radio Velocity (km/s)')
@@ -1230,6 +1262,9 @@ class ExplorerTab(QWidget):
             panel['pv_velocity_axis'] = None
             panel['id'] = i
             panel['unit'] = ''
+            panel['pv_hover_line'] = pg.InfiniteLine(angle=90, movable=False, pen=pg.mkPen('m', width=1.5, style=Qt.DashLine))
+            panel['pv_hover_line'].hide()
+            plot_item.addItem(panel['pv_hover_line'])
             self.panels.append(panel)
 
             combo.currentTextChanged.connect(self.update_moment_maps)
@@ -1498,7 +1533,8 @@ class ExplorerTab(QWidget):
             self.clear_panel_pv_diagram(panel)
             return
 
-        offsets, pv_data = self.sample_cube_along_line(active_item["roi"], cube_data)
+        offsets, pv_data = self.sample_cube_along_line(active_item["roi"], cube_data,
+                                                         width=active_item.get('width', 1))
         if offsets is None or pv_data is None or pv_data.size == 0:
             self.clear_panel_pv_diagram(panel)
             return
@@ -1844,7 +1880,7 @@ class ExplorerTab(QWidget):
 
     def add_pv_cut(self, roi):
         name = f"Cut {len(self.pv_cuts) + 1}"
-        cut_info = {"name": name, "roi": roi}
+        cut_info = {"name": name, "roi": roi, "width": 1}
         self.pv_cuts.append(cut_info)
 
         text_item = pg.TextItem(text=name, color=(220, 220, 220, 180), anchor=(0, 1))
@@ -1858,7 +1894,14 @@ class ExplorerTab(QWidget):
         direction_item.setZValue(20)
         self.plot_channel.addItem(direction_item)
 
-        def update_annotations(r=roi, t=text_item, a=direction_item):
+        from PyQt5.QtWidgets import QGraphicsPolygonItem
+        width_item = QGraphicsPolygonItem()
+        width_item.setBrush(pg.mkBrush(255, 255, 255, 40))
+        width_item.setPen(pg.mkPen(255, 255, 255, 100, width=1))
+        width_item.setZValue(19)
+        self.plot_channel.addItem(width_item)
+
+        def update_annotations(r=roi, t=text_item, a=direction_item, w_item=width_item, c_info=cut_info):
             points = self.get_line_roi_points(r)
             if points is None:
                 return
@@ -1867,6 +1910,8 @@ class ExplorerTab(QWidget):
             length = np.hypot(vec[0], vec[1])
             if length <= 0:
                 a.setData([], [])
+                from PyQt5.QtGui import QPolygonF
+                w_item.setPolygon(QPolygonF())
                 return
 
             unit = vec / length
@@ -1884,12 +1929,36 @@ class ExplorerTab(QWidget):
                 [left[1], tip[1], np.nan, right[1], tip[1]],
             )
 
+            # Draw width polygon
+            cut_width_pixels = c_info.get("width", 1)
+            if cut_width_pixels <= 1:
+                w_item.hide()
+            else:
+                w_item.show()
+                width_arcsec = cut_width_pixels * self.pix_scale_arcsec
+                hw = width_arcsec / 2.0
+                p1_left = p1 + normal * hw
+                p1_right = p1 - normal * hw
+                p2_left = p2 + normal * hw
+                p2_right = p2 - normal * hw
+                
+                from PyQt5.QtGui import QPolygonF
+                from PyQt5.QtCore import QPointF
+                poly = QPolygonF([
+                    QPointF(p1_left[0], p1_left[1]),
+                    QPointF(p2_left[0], p2_left[1]),
+                    QPointF(p2_right[0], p2_right[1]),
+                    QPointF(p1_right[0], p1_right[1])
+                ])
+                w_item.setPolygon(poly)
+
         roi.sigRegionChanged.connect(update_annotations)
         roi.sigRegionChanged.connect(self.update_moment_maps)
         update_annotations()
 
         cut_info["text_item"] = text_item
         cut_info["direction_item"] = direction_item
+        cut_info["width_item"] = width_item
         cut_info["update_annotations"] = update_annotations
 
         self.refresh_all_pv_cut_combos()
@@ -1916,7 +1985,7 @@ class ExplorerTab(QWidget):
             self._pv_edit_dialog.activateWindow()
             return
         roi_dict = {"name": cut_dict["name"], "roi": cut_dict["roi"], "tool": "PV Cut",
-                     "text_item": cut_dict.get("text_item")}
+                     "text_item": cut_dict.get("text_item"), "pv_cut_dict": cut_dict}
         dlg = RegionPropertiesDialog(cut_dict["roi"], self, parent=self.window(), roi_dict=roi_dict)
         self._pv_edit_dialog = dlg
         dlg.show()
@@ -1959,6 +2028,12 @@ class ExplorerTab(QWidget):
                             direction_item.scene().removeItem(direction_item)
                         else:
                             self.plot_channel.removeItem(direction_item)
+                    width_item = item.get("width_item")
+                    if width_item is not None:
+                        if width_item.scene():
+                            width_item.scene().removeItem(width_item)
+                        else:
+                            self.plot_channel.removeItem(width_item)
                     self.pv_cuts.pop(i)
                     break
 
@@ -2006,12 +2081,14 @@ class ExplorerTab(QWidget):
         y_pix = (y_world - start_y) / self.pix_scale_arcsec
         return x_pix, y_pix
 
-    def sample_cube_along_line(self, roi, cube_data=None):
+    def sample_cube_along_line(self, roi, cube_data=None, width=1):
         points = self.get_line_roi_points(roi)
         if points is None:
             return None, None
         if cube_data is None:
             cube_data = self.cube_clean
+        if width < 1 or width % 2 == 0:
+            width = 1
 
         p1, p2 = points
         dx_world = p2[0] - p1[0]
@@ -2019,33 +2096,80 @@ class ExplorerTab(QWidget):
         length_arcsec = np.hypot(dx_world, dy_world)
         n_samples = max(int(np.ceil(length_arcsec / max(self.pix_scale_arcsec, 1e-6))) + 1, 2)
 
-        xs = np.linspace(p1[0], p2[0], n_samples)
-        ys = np.linspace(p1[1], p2[1], n_samples)
+        if width == 1:
+            xs = np.linspace(p1[0], p2[0], n_samples)
+            ys = np.linspace(p1[1], p2[1], n_samples)
+            offsets = np.linspace(0.0, length_arcsec, n_samples)
+
+            x_pix, y_pix = self.world_to_pixel(xs, ys)
+            valid = (
+                (x_pix >= 0.0)
+                & (x_pix <= self.nx - 1)
+                & (y_pix >= 0.0)
+                & (y_pix <= self.ny - 1)
+            )
+
+            nv = cube_data.shape[0]
+            samples = np.full((nv, n_samples), np.nan, dtype=np.float64)
+            if np.any(valid):
+                x0 = np.floor(x_pix[valid]).astype(np.int64)
+                y0 = np.floor(y_pix[valid]).astype(np.int64)
+                x1 = np.clip(x0 + 1, 0, self.nx - 1).astype(np.int64)
+                y1 = np.clip(y0 + 1, 0, self.ny - 1).astype(np.int64)
+                fx = (x_pix[valid] - x0).astype(np.float64)
+                fy = (y_pix[valid] - y0).astype(np.float64)
+                buf = np.ascontiguousarray(cube_data, dtype=np.float64)
+                out = np.empty((nv, int(valid.sum())), dtype=np.float64)
+                _bilinear_interp(buf, x0, y0, x1, y1, fx, fy, out)
+                samples[:, valid] = out
+
+            return offsets, samples.T
+
+        half_w = width // 2
+        all_samples = []
+        for k in range(-half_w, half_w + 1):
+            off_x = k * self.pix_scale_arcsec * dy_world / max(length_arcsec, 1e-6)
+            off_y = -k * self.pix_scale_arcsec * dx_world / max(length_arcsec, 1e-6)
+
+            off_p1 = np.array([p1[0] + off_x, p1[1] + off_y], dtype=float)
+            off_p2 = np.array([p2[0] + off_x, p2[1] + off_y], dtype=float)
+
+            off_xs = np.linspace(off_p1[0], off_p2[0], n_samples)
+            off_ys = np.linspace(off_p1[1], off_p2[1], n_samples)
+
+            x_pix, y_pix = self.world_to_pixel(off_xs, off_ys)
+            valid = (
+                (x_pix >= 0.0)
+                & (x_pix <= self.nx - 1)
+                & (y_pix >= 0.0)
+                & (y_pix <= self.ny - 1)
+            )
+
+            nv = cube_data.shape[0]
+            row = np.full((nv, n_samples), np.nan, dtype=np.float64)
+            if np.any(valid):
+                x0 = np.floor(x_pix[valid]).astype(np.int64)
+                y0 = np.floor(y_pix[valid]).astype(np.int64)
+                x1 = np.clip(x0 + 1, 0, self.nx - 1).astype(np.int64)
+                y1 = np.clip(y0 + 1, 0, self.ny - 1).astype(np.int64)
+                fx = (x_pix[valid] - x0).astype(np.float64)
+                fy = (y_pix[valid] - y0).astype(np.float64)
+                buf = np.ascontiguousarray(cube_data, dtype=np.float64)
+                out = np.empty((nv, int(valid.sum())), dtype=np.float64)
+                _bilinear_interp(buf, x0, y0, x1, y1, fx, fy, out)
+                row[:, valid] = out
+
+            all_samples.append(row)
+
+        if not all_samples:
+            offsets = np.linspace(0.0, length_arcsec, n_samples)
+            return offsets, np.full((n_samples, cube_data.shape[0]), np.nan, dtype=np.float64)
+
         offsets = np.linspace(0.0, length_arcsec, n_samples)
-
-        x_pix, y_pix = self.world_to_pixel(xs, ys)
-        valid = (
-            (x_pix >= 0.0)
-            & (x_pix <= self.nx - 1)
-            & (y_pix >= 0.0)
-            & (y_pix <= self.ny - 1)
-        )
-
-        nv = cube_data.shape[0]
-        samples = np.full((nv, n_samples), np.nan, dtype=np.float64)
-        if np.any(valid):
-            x0 = np.floor(x_pix[valid]).astype(np.int64)
-            y0 = np.floor(y_pix[valid]).astype(np.int64)
-            x1 = np.clip(x0 + 1, 0, self.nx - 1).astype(np.int64)
-            y1 = np.clip(y0 + 1, 0, self.ny - 1).astype(np.int64)
-            fx = (x_pix[valid] - x0).astype(np.float64)
-            fy = (y_pix[valid] - y0).astype(np.float64)
-            buf = np.ascontiguousarray(cube_data, dtype=np.float64)
-            out = np.empty((nv, int(valid.sum())), dtype=np.float64)
-            _bilinear_interp(buf, x0, y0, x1, y1, fx, fy, out)
-            samples[:, valid] = out
-
-        return offsets, samples.T
+        stacked = np.dstack(all_samples)
+        with np.errstate(all='ignore'):
+            avg = np.nanmean(stacked, axis=2)
+        return offsets, avg
 
     def update_pv_diagram(self, _=None):
         self.update_moment_maps()
@@ -2798,6 +2922,16 @@ class ExplorerTab(QWidget):
                         dscene.removeItem(direction_item)
                     else:
                         self.plot_channel.removeItem(direction_item)
+                except Exception:
+                    pass
+            width_item = cut_info.get('width_item')
+            if width_item is not None:
+                try:
+                    wscene = width_item.scene()
+                    if wscene is not None:
+                        wscene.removeItem(width_item)
+                    else:
+                        self.plot_channel.removeItem(width_item)
                 except Exception:
                     pass
         self.pv_cuts = []
@@ -4103,6 +4237,7 @@ class ExplorerTab(QWidget):
                     cfg['pv_points'] = points           # (p1, p2) numpy arrays or None
                     cfg['pv_cube']   = self.cube_clean if use_full else selected_cube
                     cfg['pv_sub_v']  = self.v_axis     if use_full else sub_v
+                    cfg['pv_width']  = active_item.get('width', 1)
                 else:
                     cfg['pv_points'] = None
 
@@ -4223,6 +4358,56 @@ class ExplorerTab(QWidget):
 
     def hover_event(self, pos, plot_item, data_array, active_label, panel_id='channel'):
         self.clear_all_hover_labels()
+
+        hovered_pv_cut_name = None
+        hovered_offset = None
+        
+        if panel_id == 'channel' and plot_item.sceneBoundingRect().contains(pos):
+            mp = plot_item.vb.mapSceneToView(pos)
+            mouse_pt = np.array([mp.x(), mp.y()])
+            
+            from PyQt5.QtCore import QPointF
+            for item in self.pv_cuts:
+                hit = False
+                w_item = item.get("width_item")
+                if w_item is not None and w_item.isVisible() and w_item.contains(QPointF(mp.x(), mp.y())):
+                    hit = True
+                elif item.get("roi") is not None and self.line_roi_hit_test(item["roi"], pos, tolerance=10.0):
+                    hit = True
+                    
+                if hit:
+                    pts = self.get_line_roi_points(item["roi"])
+                    if pts is not None:
+                        p1, p2 = pts
+                        vec = p2 - p1
+                        length = np.hypot(vec[0], vec[1])
+                        if length > 0:
+                            unit = vec / length
+                            offset = np.dot(mouse_pt - p1, unit)
+                            offset = max(0.0, min(length, offset))
+                            hovered_pv_cut_name = item["name"]
+                            hovered_offset = offset
+                            break
+
+        if hasattr(self, 'pv_hover_line_main'):
+            if self.combo_panel_mode.currentText() != "Spatial Analysis" and hovered_pv_cut_name is not None and getattr(self, 'combo_pv_cuts', None) and self.combo_pv_cuts.currentText() == hovered_pv_cut_name:
+                self.pv_hover_line_main.setPos(hovered_offset)
+                self.pv_hover_line_main.show()
+                self.lbl_hover_pv.setText(f"Offset: {hovered_offset:.2f} arcsec")
+                self.lbl_hover_pv.setStyleSheet("color: #3498db; font-weight: bold; font-size: 9.5px;")
+            else:
+                self.pv_hover_line_main.hide()
+
+        for panel in self.panels:
+            if 'pv_hover_line' in panel:
+                if panel['combo'].currentText() == "PV Diagram" and hovered_pv_cut_name is not None and panel['combo_pv_cut'].currentText() == hovered_pv_cut_name:
+                    panel['pv_hover_line'].setPos(hovered_offset)
+                    panel['pv_hover_line'].show()
+                    panel['lbl_hover'].setText(f"Offset: {hovered_offset:.2f} arcsec")
+                    panel['lbl_hover'].setStyleSheet("color: #3498db; font-weight: bold; font-size: 9.5px;")
+                else:
+                    panel['pv_hover_line'].hide()
+
         if data_array is None or self.cube_clean is None: return
 
         if getattr(self, 'is_drawing_polygon', False) and panel_id == 'channel':
