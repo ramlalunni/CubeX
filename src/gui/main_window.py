@@ -6,7 +6,6 @@ from astropy.io import fits
 import pyqtgraph as pg
 
 from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QKeySequence
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QAction, QTabWidget, 
                              QFileDialog, QMessageBox, QMenu, QDialog, 
                              QVBoxLayout, QHBoxLayout, QTextEdit, QCheckBox, QPushButton, QLabel)

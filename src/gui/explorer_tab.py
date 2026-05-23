@@ -1,4 +1,5 @@
 import csv
+import warnings
 import numpy as np
 import pyqtgraph as pg
 import matplotlib.pyplot as plt
@@ -9,7 +10,7 @@ import astropy.units as u
 from PyQt5.QtCore import QTimer, Qt, QThread, pyqtSignal
 from PyQt5.QtGui import QPainterPath
 from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
-                             QPushButton, QFileDialog, QMessageBox, QLineEdit, 
+                             QPushButton, QMessageBox, QLineEdit, 
                              QComboBox, QFrame, QStackedWidget, QSizePolicy, QTabWidget,
                              QGroupBox, QCheckBox, QDialog, QScrollArea, QGridLayout, QStyle)
 
@@ -286,7 +287,9 @@ class MomentWorker(QThread):
                     if is_all_nan:
                         data = np.full(m0_raw.shape, np.nan)
                     else:
-                        data = np.nanmax(mc, axis=0)
+                        with warnings.catch_warnings():
+                            warnings.simplefilter("ignore")
+                            data = np.nanmax(mc, axis=0)
                     levels   = (0, float(np.nanmax(data)) if not np.isnan(data).all() else 1.0)
                     unit_str = display_unit
 
@@ -636,6 +639,10 @@ class ExplorerTab(QWidget):
         self.is_absolute_wcs = False
         
         self.rest_freq_hz = None
+
+        self.is_drawing_polygon = False
+        self.polygon_points = []
+        self.roi_selected = False
         self.catalog_overlay_items = []
         self.spectrum_spatial_rois = [] # List of {"name": str, "roi": ROI, "checkbox": QCheckBox, "color": str}
         self.active_spatial_spectrum_roi = None
@@ -2547,13 +2554,41 @@ class ExplorerTab(QWidget):
             self.ch_levels = (0, peak_flux if peak_flux > 0 else 1.0)
 
             self.slider_channel.setRange(0, len(self.v_axis) - 1)
-            self.slider_channel.setValue(len(self.v_axis) // 2)
+            mean_spectrum = np.nanmean(self.cube_clean, axis=(1, 2))
+            brightest_ch = int(np.nanargmax(mean_spectrum))
+            self.slider_channel.setValue(brightest_ch)
             self.v_line.show()
-            
+
             v_min, v_max = np.nanmin(self.v_axis), np.nanmax(self.v_axis)
-            self.region.setRegion([v_min + 0.4*(v_max-v_min), v_min + 0.6*(v_max-v_min)])
+            peak_vel = self.v_axis[brightest_ch]
+            half_span = 0.1 * (v_max - v_min)
+            r_lo = max(v_min, peak_vel - half_span)
+            r_hi = min(v_max, peak_vel + half_span)
+            if r_hi - r_lo < 0.02 * (v_max - v_min):
+                r_lo = v_min + 0.4 * (v_max - v_min)
+                r_hi = v_min + 0.6 * (v_max - v_min)
+            self.region.setRegion([r_lo, r_hi])
             self.region.show()
-            self.change_roi(self.combo_roi.currentText())
+            self.combo_roi.blockSignals(True)
+            self.combo_roi.setCurrentText("Whole Map")
+            self.combo_roi.blockSignals(False)
+            self.roi_selected = False
+            self.change_roi("Whole Map")
+
+            self.combo_spec_stat.blockSignals(True)
+            self.combo_spec_stat.setCurrentText("Mean")
+            self.combo_spec_stat.blockSignals(False)
+            self.smoothing_params = None
+            if hasattr(self, 'spectrum_tabs'):
+                idx = self.spectrum_tabs.indexOf(self.plot_widget_smooth)
+                if idx != -1:
+                    self.spectrum_tabs.removeTab(idx)
+                self.spectrum_tabs.tabBar().hide()
+                self.spectrum_tabs.setCurrentWidget(self.plot_widget)
+            self.spectrum_curve_smooth.setData([], [])
+            for p in self.panels:
+                p['input_thresh'].setText("0.000")
+
             self.update_moment_maps()
             
             self.update_wcs_mode(self.parent_window.is_absolute_wcs)
@@ -2570,6 +2605,16 @@ class ExplorerTab(QWidget):
         self.raw_header = None
         self.wcs_2d = None
         self.rest_freq_hz = None
+
+        self.is_drawing_polygon = False
+        self.polygon_points = []
+        if self.polygon_preview_line is not None:
+            try:
+                self.plot_channel.removeItem(self.polygon_preview_line)
+            except Exception:
+                pass
+            self.polygon_preview_line = None
+        self.roi_selected = False
 
         for item in getattr(self, 'spatial_rois', []):
             di = item.get("direction_item")
@@ -2740,11 +2785,25 @@ class ExplorerTab(QWidget):
 
         self.lbl_region_result.setText("---")
 
-        self.view_channel.clear()
-        self.view_channel.getView().clear()
+        self.input_channel_vel.setText("")
+        self.input_vmin.setText("0.00")
+        self.input_vmax.setText("1.00")
+        self.combo_spec_stat.blockSignals(True)
+        self.combo_spec_stat.setCurrentText("Mean")
+        self.combo_spec_stat.blockSignals(False)
+        self.smoothing_params = None
+        self.spectrum_curve_smooth.setData([], [])
+        if hasattr(self, 'spectrum_tabs'):
+            idx = self.spectrum_tabs.indexOf(self.plot_widget_smooth)
+            if idx != -1:
+                self.spectrum_tabs.removeTab(idx)
+            self.spectrum_tabs.tabBar().hide()
+            self.spectrum_tabs.setCurrentWidget(self.plot_widget)
+        for p in self.panels:
+            p['input_thresh'].setText("0.000")
+
+        self.view_channel.getImageItem().clear()
         self.spectrum_curve.setData([], [])
-        if hasattr(self, 'spectrum_curve_smooth'):
-            self.spectrum_curve_smooth.setData([], [])
         self.plot_widget.setLabel('left', 'Flux')
         if hasattr(self, 'plot_widget_smooth'):
             self.plot_widget_smooth.setLabel('left', 'Flux')
@@ -2784,7 +2843,6 @@ class ExplorerTab(QWidget):
             except Exception: pass
         self.contour_overlays = []
         self._clear_all_overlay_spatial_curves()
-        self.plot_channel.clear()
         if hasattr(self.plot_widget, 'plotItem') and self.plot_widget.plotItem.legend is not None:
             self.plot_widget.plotItem.legend.clear()
         if hasattr(self, 'plot_widget_smooth') and hasattr(self.plot_widget_smooth, 'plotItem') and self.plot_widget_smooth.plotItem.legend is not None:
