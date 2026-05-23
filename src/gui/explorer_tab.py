@@ -4002,24 +4002,23 @@ class ExplorerTab(QWidget):
     def _update_spectrum_state_machine(self):
         stat = self.combo_spec_stat.currentText()
         if stat == "Sum (Integrated)":
-            self.combo_spec_unit.blockSignals(True)
-            self.combo_spec_unit.setCurrentText("Jy")
-            self.combo_spec_unit.blockSignals(False)
             for i in range(self.combo_spec_unit.count()):
-                if self.combo_spec_unit.itemText(i) in ["Jy"]:
+                if self.combo_spec_unit.itemText(i) == "Jy":
                     self.combo_spec_unit.model().item(i).setEnabled(True)
                 else:
                     self.combo_spec_unit.model().item(i).setEnabled(False)
+            
+            if self.combo_spec_unit.currentText() != "Jy":
+                self.combo_spec_unit.setCurrentIndex(1) # Auto-switch to Jy
         else:
             for i in range(self.combo_spec_unit.count()):
                 if "Native" in self.combo_spec_unit.itemText(i) or self.combo_spec_unit.itemText(i) == "K":
                     self.combo_spec_unit.model().item(i).setEnabled(True)
                 else:
                     self.combo_spec_unit.model().item(i).setEnabled(False)
+            
             if self.combo_spec_unit.currentText() == "Jy":
-                self.combo_spec_unit.blockSignals(True)
-                self.combo_spec_unit.setCurrentIndex(0) # Native
-                self.combo_spec_unit.blockSignals(False)
+                self.combo_spec_unit.setCurrentIndex(0) # Auto-switch to Native
 
     def update_spectrum(self):
         if self.cube_clean is None: return
