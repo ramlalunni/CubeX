@@ -1067,10 +1067,17 @@ class ExplorerTab(QWidget):
         input_layout = QHBoxLayout()
         input_layout.addWidget(QLabel("Statistic:"))
         self.combo_spec_stat = QComboBox()
-        self.combo_spec_stat.addItems(["Mean", "Max", "Sum"])
+        self.combo_spec_stat.addItems(["Sum (Integrated)", "Mean", "Median", "Max (Peak)"])
+        self.combo_spec_stat.currentTextChanged.connect(self._update_spectrum_state_machine)
         self.combo_spec_stat.currentTextChanged.connect(self.update_spectrum)
         self.combo_spec_stat.currentTextChanged.connect(lambda: self.lbl_region_result.setText("---"))
         input_layout.addWidget(self.combo_spec_stat)
+        
+        input_layout.addWidget(QLabel("Unit:"))
+        self.combo_spec_unit = QComboBox()
+        self.combo_spec_unit.addItems(["Native", "Jy", "K"])
+        self.combo_spec_unit.currentTextChanged.connect(self.update_spectrum)
+        input_layout.addWidget(self.combo_spec_unit)
         
         self.btn_smooth = QPushButton("Smooth")
         self.btn_smooth.clicked.connect(self.open_smoothing_dialog)
@@ -2299,6 +2306,7 @@ class ExplorerTab(QWidget):
                     for curve_name in list(getattr(self, 'overlay_spatial_curves_2', {}).keys()):
                         getattr(self, 'overlay_spatial_curves_2')[curve_name].setData([], [])
 
+
                     self._cleanup_stale_overlay_spatial_curves_plot1(overlay_repr.keys())
                     self._refresh_spatial_legend(1)
                     self.stacked_spatial_info.setCurrentIndex(0)
@@ -2306,7 +2314,22 @@ class ExplorerTab(QWidget):
                     self.lbl_spatial_stats.setText("Line profile plotted.")
 
             elif tool in ["Rectangle", "Ellipse"]:
-                sub_data = roi.getArrayRegion(data, self.view_channel.getImageItem())
+                if isinstance(roi, (pg.EllipseROI, pg.PolyLineROI)):
+                    sub_data = roi.getArrayRegion(data, self.view_channel.getImageItem())
+                    dummy_ones = np.ones_like(data)
+                    roi_mask = roi.getArrayRegion(dummy_ones, self.view_channel.getImageItem())
+                    if sub_data is not None and roi_mask is not None:
+                        sub_data[roi_mask == 0] = np.nan
+                elif isinstance(roi, pg.RectROI):
+                    sub_data = roi.getArrayRegion(data, self.view_channel.getImageItem())
+                    roi_mask = None
+                elif isinstance(roi, (pg.LineSegmentROI, pg.LineROI, pg.PointROI)):
+                    sub_data = roi.getArrayRegion(data, self.view_channel.getImageItem())
+                    roi_mask = None
+                else:
+                    sub_data = roi.getArrayRegion(data, self.view_channel.getImageItem())
+                    roi_mask = None
+
                 if sub_data is not None and sub_data.size > 0:
                     valid = sub_data[~np.isnan(sub_data)]
                     if len(valid) > 0:
@@ -2331,6 +2354,8 @@ class ExplorerTab(QWidget):
 
                         for ov_name, ov_data in overlay_repr.items():
                             ov_sub = roi.getArrayRegion(ov_data, self.view_channel.getImageItem())
+                            if ov_sub is not None and roi_mask is not None:
+                                ov_sub[roi_mask == 0] = np.nan
                             if ov_sub is not None and ov_sub.size > 0:
                                 ov_valid = ov_sub[~np.isnan(ov_sub)]
                                 if len(ov_valid) > 0:
@@ -2693,20 +2718,118 @@ class ExplorerTab(QWidget):
             cdelt1 = sc.header.get('CDELT1', None)
             self.pix_scale_arcsec = abs(float(cdelt2)) * 3600.0 if cdelt2 else 1.0 
             
-            bmaj = sc.header.get('BMAJ')
-            bmin = sc.header.get('BMIN')
-            if bmaj and bmin and cdelt1 and cdelt2:
-                beam_area = (np.pi * bmaj * bmin) / (4.0 * np.log(2.0))
-                pix_area = abs(cdelt1 * cdelt2)
-                self.pixels_per_beam = beam_area / pix_area
-            else:
-                self.pixels_per_beam = 1.0
-
             raw_cube = sc.filled_data[:].value
             self.v_axis = sc.spectral_axis.value
             
             self.cube_clean = np.transpose(raw_cube, (0, 2, 1))
             self.nx, self.ny = self.cube_clean.shape[1], self.cube_clean.shape[2]
+            
+            # Multi-Beam Header Parsing
+            self.bmaj_array = None
+            self.bmin_array = None
+            self.pixels_per_beam_array = None
+            self.beam_omega_array = None
+            self.freq_array = None
+            self.can_convert_units = True
+            
+            # Extract frequency array
+            try:
+                if sc.header.get('CTYPE3', '').startswith('FREQ'):
+                    freq_crval = sc.header.get('CRVAL3')
+                    freq_cdelt = sc.header.get('CDELT3')
+                    freq_crpix = sc.header.get('CRPIX3')
+                    self.freq_array = freq_crval + (np.arange(len(self.v_axis)) - (freq_crpix - 1)) * freq_cdelt
+                elif sc.header.get('RESTFRQ') or sc.header.get('RESTFREQ'):
+                    rf = sc.header.get('RESTFRQ', sc.header.get('RESTFREQ'))
+                    self.freq_array = rf * (1.0 - (self.v_axis * 1000.0) / const.c.value)
+                else:
+                    self.can_convert_units = False
+            except Exception:
+                self.can_convert_units = False
+
+            try:
+                with fits.open(file_name) as hdul:
+                    is_multibeam = sc.header.get('CASAMBM', 'F') == 'T' or 'BEAMS' in hdul
+                    
+                    if is_multibeam and 'BEAMS' in hdul:
+                        beams_data = hdul['BEAMS'].data
+                        bmaj_raw = beams_data['BMAJ']
+                        bmin_raw = beams_data['BMIN']
+                        
+                        if len(bmaj_raw) == len(self.v_axis):
+                            bmaj_unit = hdul['BEAMS'].columns['BMAJ'].unit
+                            if bmaj_unit and 'deg' in str(bmaj_unit).lower():
+                                self.bmaj_array = bmaj_raw
+                                self.bmin_array = bmin_raw
+                            else:
+                                self.bmaj_array = bmaj_raw / 3600.0
+                                self.bmin_array = bmin_raw / 3600.0
+                        else:
+                            bmaj = sc.header.get('BMAJ')
+                            bmin = sc.header.get('BMIN')
+                            if bmaj and bmin:
+                                self.bmaj_array = np.full(len(self.v_axis), bmaj)
+                                self.bmin_array = np.full(len(self.v_axis), bmin)
+                            else:
+                                self.can_convert_units = False
+                    else:
+                        bmaj = sc.header.get('BMAJ')
+                        bmin = sc.header.get('BMIN')
+                        if bmaj and bmin:
+                            self.bmaj_array = np.full(len(self.v_axis), bmaj)
+                            self.bmin_array = np.full(len(self.v_axis), bmin)
+                        else:
+                            self.can_convert_units = False
+            except Exception:
+                bmaj = sc.header.get('BMAJ')
+                bmin = sc.header.get('BMIN')
+                if bmaj and bmin:
+                    self.bmaj_array = np.full(len(self.v_axis), bmaj)
+                    self.bmin_array = np.full(len(self.v_axis), bmin)
+                else:
+                    self.can_convert_units = False
+                    
+            if self.bmaj_array is not None and self.bmin_array is not None and cdelt1 and cdelt2:
+                omega_pix = abs(cdelt1 * cdelt2) * (u.deg ** 2)
+                self.omega_pix_sr = omega_pix.to(u.sr)
+                
+                omega_beam = (np.pi * self.bmaj_array * self.bmin_array) / (4.0 * np.log(2.0)) * (u.deg ** 2)
+                self.omega_beam_sr = omega_beam.to(u.sr)
+                
+                self.n_beam_array = self.omega_beam_sr / self.omega_pix_sr
+                self.pixels_per_beam = self.n_beam_array[0].value
+            else:
+                self.omega_pix_sr = 1.0 * u.sr
+                self.omega_beam_sr = np.ones(len(self.v_axis)) * u.sr
+                self.n_beam_array = np.ones(len(self.v_axis)) * u.dimensionless_unscaled
+                self.pixels_per_beam = 1.0
+                self.can_convert_units = False
+            
+            native_label = f"Native ({raw_bunit})" if raw_bunit != 'Unknown' else "Native"
+            self.combo_spec_unit.setItemText(0, native_label)
+            
+            if not self.can_convert_units:
+                self.combo_spec_unit.blockSignals(True)
+                self.combo_spec_unit.setCurrentIndex(0)
+                self.combo_spec_unit.blockSignals(False)
+                
+                self.combo_spec_unit.model().item(1).setEnabled(False)
+                self.combo_spec_unit.model().item(2).setEnabled(False)
+                self.combo_spec_unit.setToolTip("Conversion disabled: Missing beam or frequency metadata in FITS.")
+                
+                sum_idx = self.combo_spec_stat.findText("Sum (Integrated)")
+                if sum_idx != -1:
+                    self.combo_spec_stat.model().item(sum_idx).setEnabled(False)
+            else:
+                self.combo_spec_unit.setToolTip("")
+                sum_idx = self.combo_spec_stat.findText("Sum (Integrated)")
+                if sum_idx != -1:
+                    self.combo_spec_stat.model().item(sum_idx).setEnabled(True)
+            
+            self.combo_spec_stat.blockSignals(True)
+            self.combo_spec_stat.setCurrentText("Mean" if not self.can_convert_units else "Mean")
+            self.combo_spec_stat.blockSignals(False)
+            self._update_spectrum_state_machine()
 
             self.plot_widget.setLabel('left', f'Mean Flux ({self.display_unit})')
             self.view_channel.ui.histogram.axis.setLabel(f"Flux ({self.display_unit})")
@@ -3876,6 +3999,28 @@ class ExplorerTab(QWidget):
         self._region_dialog = dlg
         dlg.show()
 
+    def _update_spectrum_state_machine(self):
+        stat = self.combo_spec_stat.currentText()
+        if stat == "Sum (Integrated)":
+            self.combo_spec_unit.blockSignals(True)
+            self.combo_spec_unit.setCurrentText("Jy")
+            self.combo_spec_unit.blockSignals(False)
+            for i in range(self.combo_spec_unit.count()):
+                if self.combo_spec_unit.itemText(i) in ["Jy"]:
+                    self.combo_spec_unit.model().item(i).setEnabled(True)
+                else:
+                    self.combo_spec_unit.model().item(i).setEnabled(False)
+        else:
+            for i in range(self.combo_spec_unit.count()):
+                if "Native" in self.combo_spec_unit.itemText(i) or self.combo_spec_unit.itemText(i) == "K":
+                    self.combo_spec_unit.model().item(i).setEnabled(True)
+                else:
+                    self.combo_spec_unit.model().item(i).setEnabled(False)
+            if self.combo_spec_unit.currentText() == "Jy":
+                self.combo_spec_unit.blockSignals(True)
+                self.combo_spec_unit.setCurrentIndex(0) # Native
+                self.combo_spec_unit.blockSignals(False)
+
     def update_spectrum(self):
         if self.cube_clean is None: return
         stat = self.combo_spec_stat.currentText()
@@ -3905,6 +4050,9 @@ class ExplorerTab(QWidget):
                 
         ymax_global = -np.inf
         
+        stat = self.combo_spec_stat.currentText()
+        unit_sel = self.combo_spec_unit.currentText()
+        
         with np.errstate(invalid='ignore', divide='ignore'):
             for r_dict in rois_to_plot:
                 roi = r_dict["roi"]
@@ -3916,22 +4064,71 @@ class ExplorerTab(QWidget):
                 else:
                     sub_data = roi.getArrayRegion(self.cube_clean, self.view_channel.getImageItem(), axes=(1, 2))
                     
+                    # Create precise boolean mask using PyQtGraph rasterization
+                    dummy_ones = np.ones((self.nx, self.ny))
+                    roi_mask = roi.getArrayRegion(dummy_ones, self.view_channel.getImageItem(), axes=(0, 1))
+                    
+                    # Safely set background bounding-box pixels to np.nan
+                    sub_data[:, roi_mask == 0] = np.nan
+                    
+                # Print valid pixels count for diagnostic purposes
+                # if len(sub_data) > 0:
+                #     n_valid_pixels = np.count_nonzero(~np.isnan(sub_data[0]))
+                #     print(f"[{stat}] Valid pixels in mask for region '{name}': {n_valid_pixels}")
+                    
+                # Phase 2: Spatial Collapse
                 if "Max" in stat:
-                    spec = np.nanmax(sub_data, axis=(1, 2))
-                    y_label = f"Max Flux ({self.display_unit})"
-                    self.spec_unit = self.display_unit
+                    raw_array = np.nanmax(sub_data, axis=(1, 2))
                 elif "Sum" in stat:
-                    spec = np.nansum(sub_data, axis=(1, 2))
-                    if self.pixels_per_beam > 1.0:
-                        spec /= self.pixels_per_beam
-                        self.spec_unit = self.display_unit.replace('/beam', '')
-                    else:
-                        self.spec_unit = f"{self.display_unit} * pix"
-                    y_label = f"Sum Flux ({self.spec_unit})"
+                    raw_array = np.nansum(sub_data, axis=(1, 2))
+                elif "Median" in stat:
+                    raw_array = np.nanmedian(sub_data, axis=(1, 2))
                 else:
-                    spec = np.nanmean(sub_data, axis=(1, 2))
-                    y_label = f"Mean Flux ({self.display_unit})"
+                    raw_array = np.nanmean(sub_data, axis=(1, 2))
+                
+                # Phase 3: The 4 Conversion Paths
+                unit_lower = self.display_unit.replace(" ", "").lower()
+                
+                if "Native" in unit_sel or not self.can_convert_units:
+                    # Path 4: Native matches Target
+                    final_array = raw_array
+                    y_label = f"{stat} ({self.display_unit})"
                     self.spec_unit = self.display_unit
+                elif unit_sel == "Jy":
+                    if "jy" in unit_lower:
+                        # Path 1: Native Jy/beam, Target Jy (Statistic: Sum)
+                        if "pixel" in unit_lower or "pix" in unit_lower:
+                            flux_array_jy = raw_array
+                        else:
+                            flux_array_jy = raw_array / self.n_beam_array.value
+                        final_array = flux_array_jy
+                    elif "k" == unit_lower or "kelvin" in unit_lower:
+                        # Path 3: Native K, Target Jy (Statistic: Sum)
+                        freq_hz = self.freq_array
+                        jy_sr_per_kelvin = (1 * u.K).to(u.Jy / u.sr, equivalencies=u.brightness_temperature(freq_hz * u.Hz))
+                        flux_array_jy = raw_array * jy_sr_per_kelvin.value * self.omega_pix_sr.value
+                        final_array = flux_array_jy
+                    else:
+                        final_array = raw_array
+                    y_label = f"{stat} (Jy)"
+                    self.spec_unit = "Jy"
+                elif unit_sel == "K":
+                    if "k" == unit_lower or "kelvin" in unit_lower:
+                        # Path 4: Native K, Target K
+                        final_array = raw_array
+                    elif "jy" in unit_lower:
+                        # Path 2: Native Jy/beam, Target K (Statistic: Mean, Median, Max)
+                        omega = self.omega_pix_sr if ("pixel" in unit_lower or "pix" in unit_lower) else self.omega_beam_sr
+                        surface_brightness = (raw_array * u.Jy) / omega
+                        freq_hz = self.freq_array
+                        tb_array_k = surface_brightness.to(u.K, equivalencies=u.brightness_temperature(freq_hz * u.Hz))
+                        final_array = tb_array_k.value
+                    else:
+                        final_array = raw_array
+                    y_label = f"{stat} (K)"
+                    self.spec_unit = "K"
+                    
+                spec = final_array
                     
                 self.plot_widget.setLabel('left', y_label)
                 if hasattr(self, 'plot_widget_smooth'):
