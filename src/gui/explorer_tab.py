@@ -762,6 +762,7 @@ class ExplorerTab(QWidget):
         self.view_channel.ui.histogram.gradient.loadPreset('turbo')
         self.view_channel.ui.histogram.setFixedWidth(160) 
         fix_axis_scaling(self.view_channel.ui.histogram.axis) 
+        self.plot_channel.vb.sigRangeChanged.connect(self.update_beam_positions)
         channel_layout.addWidget(self.view_channel, stretch=1)
 
         self.lbl_hover_ch = QLabel("")
@@ -1236,6 +1237,7 @@ class ExplorerTab(QWidget):
             view.ui.histogram.setMaximumWidth(160)
             view.ui.histogram.setMinimumWidth(80)
             fix_axis_scaling(view.ui.histogram.axis) 
+            plot_item.vb.sigRangeChanged.connect(self.update_beam_positions)
             panel_layout.addWidget(view, stretch=1)
             
             lbl_hover = QLabel("")
@@ -2720,6 +2722,7 @@ class ExplorerTab(QWidget):
     # ==================== DATA LOADING ====================
     def load_file(self, file_name):
         try:
+            self.current_file_name = file_name
             self.is_2d_image = False
             try:
                 sc = SpectralCube.read(file_name).with_spectral_unit(u.km / u.s, velocity_convention='radio')
@@ -2976,6 +2979,15 @@ class ExplorerTab(QWidget):
         self.raw_header = None
         self.wcs_2d = None
         self.rest_freq_hz = None
+        
+        if hasattr(self, 'beam_visualizer_items'):
+            for key, items_list in self.beam_visualizer_items.items():
+                for item in items_list:
+                    try:
+                        if item.scene():
+                            item.scene().removeItem(item)
+                    except Exception: pass
+            self.beam_visualizer_items.clear()
 
         self.is_drawing_polygon = False
         self.polygon_points = []
@@ -3893,6 +3905,7 @@ class ExplorerTab(QWidget):
         self.draw_contours('channel', self.view_channel, slice_data)
         self.draw_overlay_contours()
         self.update_spatial_analysis()
+        self.update_beam_visualizers('channel')
         
         grad = self.view_channel.ui.histogram.gradient
         ticks = list(grad.ticks.keys())
@@ -4577,6 +4590,159 @@ class ExplorerTab(QWidget):
         if self._channel_grid_popup and self._channel_grid_popup.isVisible():
             self._channel_grid_popup.update_grid()
 
+    def update_beam_visualizers(self, panel_type, panel_id=None):
+        if self.cube_clean is None:
+            return
+
+        target_plot = self.plot_channel if panel_type == 'channel' else self.panels[panel_id]['plot_item']
+        
+        if not hasattr(self, 'beam_visualizer_items'):
+            self.beam_visualizer_items = {}
+        
+        dict_key = 'channel' if panel_type == 'channel' else f'moment_{panel_id}'
+        for item in self.beam_visualizer_items.get(dict_key, []):
+            try:
+                target_plot.vb.removeItem(item)
+            except Exception:
+                pass
+        self.beam_visualizer_items[dict_key] = []
+        
+        if panel_type == 'moment':
+            mtype = self.panels[panel_id]['combo'].currentText()
+            if 'PV Diagram' in mtype:
+                return
+        
+        beams_to_draw = []
+        
+        def get_beam_for_cube(bmaj_arr, bmin_arr, bpa_arr, bmaj_s, bmin_s, bpa_s):
+            if bmaj_arr is not None and bmin_arr is not None:
+                if panel_type == 'channel':
+                    idx = self.slider_channel.value()
+                    return bmaj_arr[idx], bmin_arr[idx], (bpa_arr[idx] if bpa_arr is not None else 0.0)
+                elif panel_type == 'moment':
+                    if getattr(self, 'slider_velocity', None) is not None:
+                        rg = self.slider_velocity.getRegion()
+                        v_min, v_max = rg
+                        mask = (self.v_axis >= v_min) & (self.v_axis <= v_max) if self.v_axis[0] < self.v_axis[-1] else (self.v_axis <= v_min) & (self.v_axis >= v_max)
+                        mask_idx = np.where(mask)[0]
+                        if len(mask_idx) > 0:
+                            b_ma = np.nanmedian(bmaj_arr[mask_idx])
+                            b_mi = np.nanmedian(bmin_arr[mask_idx])
+                            b_pa = np.nanmedian(bpa_arr[mask_idx]) if bpa_arr is not None else 0.0
+                            return b_ma, b_mi, b_pa
+                    return np.nanmedian(bmaj_arr), np.nanmedian(bmin_arr), np.nanmedian(bpa_arr) if bpa_arr is not None else 0.0
+            return bmaj_s, bmin_s, bpa_s if bpa_s is not None else 0.0
+
+        base_bmaj, base_bmin, base_bpa = get_beam_for_cube(
+            self.bmaj_array, self.bmin_array, getattr(self, 'bpa_array', None),
+            self.raw_header.get('BMAJ') if self.raw_header else None,
+            self.raw_header.get('BMIN') if self.raw_header else None,
+            self.raw_header.get('BPA', 0.0) if self.raw_header else 0.0
+        )
+        
+        if base_bmaj and base_bmin:
+            beams_to_draw.append({'bmaj': base_bmaj, 'bmin': base_bmin, 'bpa': base_bpa, 'color': 'white'})
+        else:
+            print(f"WARNING: No beam info found for base cube. Beam visualizer hidden.")
+            
+        processed_files = [self.current_file_name] if hasattr(self, 'current_file_name') else []
+        for ov in self.contour_overlays:
+            if panel_type == 'moment' and ov.get('_reproj_raw') is None:
+                continue
+            if ov['file'] in processed_files:
+                continue
+            processed_files.append(ov['file'])
+            
+            bmaj_o, bmin_o, bpa_o = get_beam_for_cube(
+                ov.get('bmaj_array'), ov.get('bmin_array'), None,
+                None, None, 0.0
+            )
+            if bmaj_o and bmin_o:
+                beams_to_draw.append({'bmaj': bmaj_o, 'bmin': bmin_o, 'bpa': bpa_o, 'color': ov['color']})
+                
+        if not beams_to_draw:
+            return
+            
+        t = np.linspace(0, 2*np.pi, 60)
+        for b in beams_to_draw:
+            bmaj_arcsec = b['bmaj'] * 3600.0
+            bmin_arcsec = b['bmin'] * 3600.0
+            bpa = b['bpa']
+            
+            angle_rad = np.radians(bpa + 90.0)
+            cos_a, sin_a = np.cos(angle_rad), np.sin(angle_rad)
+            
+            x_el = (bmin_arcsec / 2.0) * np.cos(t)
+            y_el = (bmaj_arcsec / 2.0) * np.sin(t)
+            x_rot = x_el * cos_a - y_el * sin_a
+            y_rot = x_el * sin_a + y_el * cos_a
+            
+            x_maj = np.array([0, 0])
+            y_maj = np.array([-bmaj_arcsec/2.0, bmaj_arcsec/2.0])
+            x_maj_rot = x_maj * cos_a - y_maj * sin_a
+            y_maj_rot = x_maj * sin_a + y_maj * cos_a
+            
+            x_min = np.array([-bmin_arcsec/2.0, bmin_arcsec/2.0])
+            y_min = np.array([0, 0])
+            x_min_rot = x_min * cos_a - y_min * sin_a
+            y_min_rot = x_min * sin_a + y_min * cos_a
+            
+            pen = pg.mkPen(b['color'], width=1.5)
+            
+            item_el = pg.PlotDataItem(x=x_rot, y=y_rot, pen=pen)
+            item_maj = pg.PlotDataItem(x=x_maj_rot, y=y_maj_rot, pen=pen)
+            item_min = pg.PlotDataItem(x=x_min_rot, y=y_min_rot, pen=pen)
+            
+            item_el.setZValue(10)
+            item_maj.setZValue(10)
+            item_min.setZValue(10)
+            
+            target_plot.vb.addItem(item_el, ignoreBounds=True)
+            target_plot.vb.addItem(item_maj, ignoreBounds=True)
+            target_plot.vb.addItem(item_min, ignoreBounds=True)
+            
+            self.beam_visualizer_items[dict_key].extend([item_el, item_maj, item_min])
+
+        self.update_beam_positions(target_plot.vb)
+
+    def update_beam_positions(self, view_box, view_range=None):
+        if not hasattr(self, 'beam_visualizer_items'): return
+        
+        target_key = None
+        if view_box == self.plot_channel.vb:
+            target_key = 'channel'
+        else:
+            for i, p in enumerate(self.panels):
+                if view_box == p['plot_item'].vb:
+                    target_key = f'moment_{i}'
+                    break
+                    
+        if target_key not in self.beam_visualizer_items: return
+        items = self.beam_visualizer_items[target_key]
+        if not items: return
+        
+        view_range = view_box.viewRange()
+        v_x_min, v_x_max = view_range[0]
+        v_y_min, v_y_max = view_range[1]
+
+        cam_left_x = max(v_x_min, v_x_max)
+        cam_bottom_y = min(v_y_min, v_y_max)
+        
+        img_left_x = (self.nx / 2.0) * self.pix_scale_arcsec
+        img_bottom_y = -(self.ny / 2.0) * self.pix_scale_arcsec
+        
+        hud_left_x = min(cam_left_x, img_left_x)
+        hud_bottom_y = max(cam_bottom_y, img_bottom_y)
+
+        pad_x = abs(v_x_max - v_x_min) * 0.03
+        pad_y = abs(v_y_max - v_y_min) * 0.03
+
+        target_x = hud_left_x - pad_x
+        target_y = hud_bottom_y + pad_y
+        
+        for item in items:
+            item.setPos(target_x, target_y)
+
 
     def update_moment_maps(self):
         """Entry point (runs on the Qt main thread).
@@ -4626,6 +4792,7 @@ class ExplorerTab(QWidget):
                 p['plot_item'].setTitle('')
                 is_vel = ('Moment 1' in mtype) or ('Moment 2' in mtype) or ('Moment 9' in mtype)
                 self.apply_cmap(p['view'], is_vel)
+            self.update_beam_visualizers('moment', panel_id=i)
 
         # ---- Extract ROI world-coordinates for PV panels ----------------
         # (get_line_roi_points uses Qt, must stay on main thread)
@@ -4757,6 +4924,7 @@ class ExplorerTab(QWidget):
                         pos=pos_tup,
                     )
                     self.draw_contours(panel_id, view, data)
+                    self.update_beam_visualizers('moment', panel_id=panel_id)
 
     def clear_all_hover_labels(self):
         for lbl in [self.lbl_hover_ch, self.lbl_hover_spec, self.lbl_hover_pv] + [p['lbl_hover'] for p in self.panels]:
