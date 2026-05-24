@@ -560,18 +560,6 @@ class ChannelMapViewBox(pg.ViewBox):
                 
         super().mouseClickEvent(ev)
 
-    def keyPressEvent(self, ev):
-        if ev.key() == Qt.Key_Escape:
-            if self.parent_tab and hasattr(self.parent_tab, 'spatial_rois_to_delete') and self.parent_tab.spatial_rois_to_delete:
-                self.parent_tab.delete_selected_spatial_regions()
-                ev.accept()
-                return
-            if self.parent_tab and hasattr(self.parent_tab, 'pv_cuts_to_delete') and self.parent_tab.pv_cuts_to_delete:
-                self.parent_tab.delete_selected_pv_cuts()
-                ev.accept()
-                return
-        super().keyPressEvent(ev)
-
 class SpectrumViewBox(pg.ViewBox):
     def __init__(self, *args, **kwds):
         super().__init__(*args, **kwds)
@@ -641,14 +629,6 @@ class SpectrumViewBox(pg.ViewBox):
                     return
         super().mouseClickEvent(ev)
 
-    def keyPressEvent(self, ev):
-        if ev.key() == Qt.Key_Escape:
-            if self.parent_tab and hasattr(self.parent_tab, 'rois_to_delete') and self.parent_tab.rois_to_delete:
-                self.parent_tab.delete_selected_regions()
-                ev.accept()
-                return
-        super().keyPressEvent(ev)
-
 class ExplorerTab(QWidget):
     def __init__(self, parent_window):
         super().__init__()
@@ -678,6 +658,12 @@ class ExplorerTab(QWidget):
         self.spectrum_spatial_rois = [] # List of {"name": str, "roi": ROI, "checkbox": QCheckBox, "color": str}
         self.active_spatial_spectrum_roi = None
         self.roi_selected = False
+        
+        from PyQt5.QtWidgets import QShortcut
+        from PyQt5.QtGui import QKeySequence
+        self.esc_shortcut = QShortcut(QKeySequence(Qt.Key_Escape), self)
+        self.esc_shortcut.setContext(Qt.WidgetWithChildrenShortcut)
+        self.esc_shortcut.activated.connect(self.handle_escape)
 
         # Polygon drawing state
         self.is_drawing_polygon = False
@@ -1354,17 +1340,16 @@ class ExplorerTab(QWidget):
             self.combo_spatial_tool.show()
             self.change_spatial_tool(self.combo_spatial_tool.currentText())
 
-    def keyPressEvent(self, event):
-        if event.key() == Qt.Key_Escape:
-            # Delete Spatial Analysis region
-            if getattr(self, 'spatial_rois_to_delete', []):
-                self.delete_selected_spatial_regions()
-            # Delete Spectrum region (if highlighted)
-            if getattr(self, 'active_spatial_spectrum_roi', None):
-                self.remove_spatial_spectrum_roi(self.active_spatial_spectrum_roi)
-                self.active_spatial_spectrum_roi = None
-        super().keyPressEvent(event)
-
+    def handle_escape(self):
+        if getattr(self, 'spatial_rois_to_delete', []):
+            self.delete_selected_spatial_regions()
+        if getattr(self, 'pv_cuts_to_delete', []):
+            self.delete_selected_pv_cuts()
+        if getattr(self, 'rois_to_delete', []):
+            self.delete_selected_regions()
+        if getattr(self, 'active_spatial_spectrum_roi', None):
+            self.remove_spatial_spectrum_roi(self.active_spatial_spectrum_roi)
+            self.active_spatial_spectrum_roi = None
     def open_smoothing_dialog(self):
         # Mutual exclusion: warn if Edit Region dialog is open
         if getattr(self, '_region_dialog', None) and self._region_dialog.isVisible():
@@ -3873,6 +3858,8 @@ class ExplorerTab(QWidget):
                 new_roi = pg.EllipseROI([cx, cy], [bmaj_arcsec, bmin_arcsec], pen='#f1c40f')
                 new_roi.setAngle(get_pyqt_angle(bpa_deg), center=[0.5, 0.5])
                 for handle in list(new_roi.getHandles()):
+                    handle.hide()
+                    handle.setParentItem(None)
                     new_roi.removeHandle(handle)
             else:
                 print("WARNING: No beam information found in FITS header. Falling back to single-pixel point extraction. Integrated Flux Density (Jy) calculations are invalid.")
@@ -3881,6 +3868,8 @@ class ExplorerTab(QWidget):
                 except AttributeError:
                     new_roi = pg.RectROI([cx, cy], [self.pix_scale_arcsec, self.pix_scale_arcsec], pen='#f1c40f')
                     for handle in list(new_roi.getHandles()):
+                        handle.hide()
+                        handle.setParentItem(None)
                         new_roi.removeHandle(handle)
         elif roi_type == "Ellipse": 
             new_roi = pg.EllipseROI([cx, cy], [sz, sz], pen='#f1c40f')
