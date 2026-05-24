@@ -2362,7 +2362,7 @@ class ExplorerTab(QWidget):
                 elif isinstance(roi, pg.RectROI):
                     sub_data = roi.getArrayRegion(data, self.view_channel.getImageItem())
                     roi_mask = None
-                elif isinstance(roi, (pg.LineSegmentROI, pg.LineROI, pg.PointROI)):
+                elif isinstance(roi, (pg.LineSegmentROI, pg.LineROI, getattr(pg, 'PointROI', type('Dummy', (), {})))):
                     sub_data = roi.getArrayRegion(data, self.view_channel.getImageItem())
                     roi_mask = None
                 else:
@@ -3850,7 +3850,38 @@ class ExplorerTab(QWidget):
                 self.btn_edit_region.hide()
                 
         new_roi = None
-        if roi_type == "Point (Beam)": new_roi = pg.CircleROI([cx, cy], [self.pix_scale_arcsec*3, self.pix_scale_arcsec*3], pen='#f1c40f')
+        if roi_type == "Point (Beam)": 
+            has_beam = False
+            bmaj_deg = 0.0
+            bmin_deg = 0.0
+            bpa_deg = 0.0
+            
+            if getattr(self, 'bmaj_array', None) is not None and getattr(self, 'bmin_array', None) is not None:
+                has_beam = True
+                bmaj_deg = np.median(self.bmaj_array) if isinstance(self.bmaj_array, (list, np.ndarray)) else self.bmaj_array
+                bmin_deg = np.median(self.bmin_array) if isinstance(self.bmin_array, (list, np.ndarray)) else self.bmin_array
+                
+                if self.raw_header is not None:
+                    bpa_val = self.raw_header.get('BPA', 0.0)
+                    bpa_deg = np.median(bpa_val) if isinstance(bpa_val, (list, np.ndarray)) else float(bpa_val)
+
+            if has_beam:
+                bmaj_arcsec = bmaj_deg * 3600.0
+                bmin_arcsec = bmin_deg * 3600.0
+                
+                from src.gui.custom import get_pyqt_angle
+                new_roi = pg.EllipseROI([cx, cy], [bmaj_arcsec, bmin_arcsec], pen='#f1c40f')
+                new_roi.setAngle(get_pyqt_angle(bpa_deg), center=[0.5, 0.5])
+                for handle in list(new_roi.getHandles()):
+                    new_roi.removeHandle(handle)
+            else:
+                print("WARNING: No beam information found in FITS header. Falling back to single-pixel point extraction. Integrated Flux Density (Jy) calculations are invalid.")
+                try:
+                    new_roi = pg.PointROI([cx, cy], pen='#f1c40f')
+                except AttributeError:
+                    new_roi = pg.RectROI([cx, cy], [self.pix_scale_arcsec, self.pix_scale_arcsec], pen='#f1c40f')
+                    for handle in list(new_roi.getHandles()):
+                        new_roi.removeHandle(handle)
         elif roi_type == "Ellipse": 
             new_roi = pg.EllipseROI([cx, cy], [sz, sz], pen='#f1c40f')
             new_roi.addScaleHandle([0, 0], [1, 1])

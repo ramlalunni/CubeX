@@ -97,3 +97,16 @@ class WCSAxisItem(pg.AxisItem):
             except Exception:
                 strings.append("")
         return strings
+
+# ==============================================================================
+# PA CONVENTION HELPERS
+# ==============================================================================
+def get_casa_pa(pyqt_roi):
+    # Translates PyQt Cartesian angle (in an invertX ViewBox) to CASA IAU PA.
+    raw_pa = 90 - pyqt_roi.angle()
+    pa = (raw_pa + 90) % 180 - 90
+    return 90.0 if pa <= -90 else pa
+
+def get_pyqt_angle(casa_pa):
+    # Translates CASA IAU PA to PyQt Cartesian angle.
+    return 90 - casa_pa

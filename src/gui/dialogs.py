@@ -473,11 +473,11 @@ class RegionPropertiesDialog(QDialog):
         self.roi = roi
         self.roi_dict = roi_dict
         self.tab = explorer_tab
-        self.tool = roi_dict.get("tool", "Unknown") if roi_dict else "Unknown"
+        self.tool = roi_dict.get("type", roi_dict.get("tool", "Unknown")) if roi_dict else "Unknown"
         self.is_ellipse = isinstance(roi, pg.EllipseROI) or self.tool == "Ellipse"
         self.is_line = isinstance(roi, pg.LineSegmentROI) or self.tool == "Line"
         self.is_polyline = (isinstance(roi, pg.PolyLineROI) and not self.is_ellipse) or self.tool == "Custom Polygon"
-        self.is_point = self.tool == "Point"
+        self.is_point = self.tool == "Point" or self.tool == "Point (Beam)"
         self.is_rect = (isinstance(roi, pg.RectROI) and not self.is_ellipse) or self.tool == "Rectangle"
         self.setWindowTitle("Region Properties")
         self.setMinimumWidth(400)
@@ -540,11 +540,7 @@ class RegionPropertiesDialog(QDialog):
         self.lbl_center_img.setStyleSheet("font-family: monospace; font-size: 11px; color: #aaa;")
         layout.addWidget(self.lbl_center_img)
         
-        if self.is_point:
-            layout.addStretch()
-            self._updating = False
-            return
-            
+
         if self.is_line:
             # Add Start/End point fields for Line
             line_layout = QVBoxLayout()
@@ -573,6 +569,9 @@ class RegionPropertiesDialog(QDialog):
             size_layout.addWidget(QLabel(size_label))
             self.edit_w = QLineEdit()
             self.edit_h = QLineEdit()
+            if self.is_point:
+                self.edit_w.setReadOnly(True)
+                self.edit_h.setReadOnly(True)
             size_layout.addWidget(self.edit_w)
             size_layout.addWidget(self.edit_h)
             layout.addLayout(size_layout)
@@ -611,6 +610,8 @@ class RegionPropertiesDialog(QDialog):
         pa_layout = QHBoxLayout()
         pa_layout.addWidget(QLabel("P.A. (deg):"))
         self.edit_pa = QLineEdit()
+        if self.is_point:
+            self.edit_pa.setReadOnly(True)
         pa_layout.addWidget(self.edit_pa)
         pa_layout.addStretch()
         layout.addLayout(pa_layout)
@@ -661,7 +662,8 @@ class RegionPropertiesDialog(QDialog):
             if self.is_polyline: return
             pos = self.roi.pos()
             size = self.roi.size()
-            angle = self.roi.angle()
+            from src.gui.custom import get_casa_pa
+            angle = get_casa_pa(self.roi)
             
             w, h = size.x(), size.y()
             cx = pos.x() + w / 2.0
@@ -708,8 +710,7 @@ class RegionPropertiesDialog(QDialog):
                         import numpy as np
                         angle = np.degrees(np.arctan2(p2_p.x() - p1_p.x(), p2_p.y() - p1_p.y())) % 360
 
-            if not self.is_point:
-                self.edit_pa.setText(f"{angle:.5f}")
+            self.edit_pa.setText(f"{angle:.5f}")
             
             if self.use_world and self.wcs:
                 px = (self.tab.nx / 2) - (cx / self.tab.pix_scale_arcsec)
@@ -719,7 +720,7 @@ class RegionPropertiesDialog(QDialog):
                 self.edit_cx.setText(sc.ra.to_string(unit=u.hour, sep=':', precision=7))
                 self.edit_cy.setText(sc.dec.to_string(unit=u.deg, sep=':', precision=6))
                 
-                if not self.is_point and not self.is_line:
+                if not self.is_line:
                     self.edit_w.setText(f"{w:.5f}\"")
                     self.edit_h.setText(f"{h:.5f}\"")
                     self.lbl_size_img.setText(f"Image: ({w / self.tab.pix_scale_arcsec:.3f} px, {h / self.tab.pix_scale_arcsec:.3f} px)")
@@ -748,7 +749,7 @@ class RegionPropertiesDialog(QDialog):
             else:
                 self.edit_cx.setText(f"{cx:.5f}")
                 self.edit_cy.setText(f"{cy:.5f}")
-                if not self.is_point and not self.is_line:
+                if not self.is_line:
                     self.edit_w.setText(f"{w:.5f}")
                     self.edit_h.setText(f"{h:.5f}")
                     self.lbl_size_img.setText(f"Image: ({w:.3f} arcsec, {h:.3f} arcsec)")
@@ -827,7 +828,8 @@ class RegionPropertiesDialog(QDialog):
                 self.roi.blockSignals(True)
                 self.roi.setPos([pos_x, pos_y])
                 self.roi.setSize([w_val, h_val])
-                self.roi.setAngle(pa_val)
+                from src.gui.custom import get_pyqt_angle
+                self.roi.setAngle(get_pyqt_angle(pa_val), center=[0.5, 0.5])
                 self.roi.blockSignals(False)
                 
             self.roi.sigRegionChanged.emit(self.roi)
