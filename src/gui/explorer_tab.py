@@ -2680,15 +2680,10 @@ class ExplorerTab(QWidget):
                 for r_dict in self.spectrum_spatial_rois:
                     roi = r_dict["roi"]
                     is_clicked = False
-                    if isinstance(roi, pg.PolyLineROI):
-                        path = QPainterPath()
-                        pts = [roi.mapToParent(h.pos()) for h in roi.getHandles()]
-                        if pts:
-                            path.moveTo(pts[0])
-                            for p in pts[1:]:
-                                path.lineTo(p)
-                            path.closeSubpath()
-                        is_clicked = path.contains(mp)
+                    if hasattr(roi, 'shape'):
+                        is_clicked = roi.shape().contains(roi.mapFromScene(event.scenePos()))
+                    elif isinstance(roi, pg.LineSegmentROI):
+                        is_clicked = self.line_roi_hit_test(roi, event.scenePos())
                     else:
                         r_pos = roi.pos()
                         r_size = roi.size()
@@ -2751,6 +2746,7 @@ class ExplorerTab(QWidget):
             # Multi-Beam Header Parsing
             self.bmaj_array = None
             self.bmin_array = None
+            self.bpa_array = None
             self.pixels_per_beam_array = None
             self.beam_omega_array = None
             self.freq_array = None
@@ -2779,6 +2775,10 @@ class ExplorerTab(QWidget):
                         beams_data = hdul['BEAMS'].data
                         bmaj_raw = beams_data['BMAJ']
                         bmin_raw = beams_data['BMIN']
+                        try:
+                            bpa_raw = beams_data['BPA']
+                        except KeyError:
+                            bpa_raw = None
                         
                         if len(bmaj_raw) == len(self.v_axis):
                             bmaj_unit = hdul['BEAMS'].columns['BMAJ'].unit
@@ -2788,6 +2788,11 @@ class ExplorerTab(QWidget):
                             else:
                                 self.bmaj_array = bmaj_raw / 3600.0
                                 self.bmin_array = bmin_raw / 3600.0
+                            if bpa_raw is not None:
+                                self.bpa_array = bpa_raw
+                            else:
+                                bpa = sc.header.get('BPA', 0.0)
+                                self.bpa_array = np.full(len(self.v_axis), bpa)
                         else:
                             bmaj = sc.header.get('BMAJ')
                             bmin = sc.header.get('BMIN')
@@ -2796,12 +2801,16 @@ class ExplorerTab(QWidget):
                                 self.bmin_array = np.full(len(self.v_axis), bmin)
                             else:
                                 self.can_convert_units = False
+                            bpa = sc.header.get('BPA', 0.0)
+                            self.bpa_array = np.full(len(self.v_axis), bpa)
                     else:
                         bmaj = sc.header.get('BMAJ')
                         bmin = sc.header.get('BMIN')
                         if bmaj and bmin:
                             self.bmaj_array = np.full(len(self.v_axis), bmaj)
                             self.bmin_array = np.full(len(self.v_axis), bmin)
+                            bpa = sc.header.get('BPA', 0.0)
+                            self.bpa_array = np.full(len(self.v_axis), bpa)
                         else:
                             self.can_convert_units = False
             except Exception:
@@ -2810,6 +2819,8 @@ class ExplorerTab(QWidget):
                 if bmaj and bmin:
                     self.bmaj_array = np.full(len(self.v_axis), bmaj)
                     self.bmin_array = np.full(len(self.v_axis), bmin)
+                    bpa = sc.header.get('BPA', 0.0)
+                    self.bpa_array = np.full(len(self.v_axis), bpa)
                 else:
                     self.can_convert_units = False
                     
@@ -3846,9 +3857,12 @@ class ExplorerTab(QWidget):
                 bmaj_deg = np.median(self.bmaj_array) if isinstance(self.bmaj_array, (list, np.ndarray)) else self.bmaj_array
                 bmin_deg = np.median(self.bmin_array) if isinstance(self.bmin_array, (list, np.ndarray)) else self.bmin_array
                 
-                if self.raw_header is not None:
+                bpa_array = getattr(self, 'bpa_array', None)
+                if bpa_array is not None:
+                    bpa_deg = np.median(bpa_array) if isinstance(bpa_array, (list, np.ndarray)) else float(bpa_array)
+                elif self.raw_header is not None:
                     bpa_val = self.raw_header.get('BPA', 0.0)
-                    bpa_deg = np.median(bpa_val) if isinstance(bpa_val, (list, np.ndarray)) else float(bpa_val)
+                    bpa_deg = float(bpa_val)
 
             if has_beam:
                 bmaj_arcsec = bmaj_deg * 3600.0
