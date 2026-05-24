@@ -633,7 +633,7 @@ class ExplorerTab(QWidget):
     def __init__(self, parent_window):
         super().__init__()
         self.parent_window = parent_window 
-        
+        self.is_2d_image = False
         self.cube_clean = None 
         self.v_axis = None
         self.display_unit = "Unknown"
@@ -2720,7 +2720,31 @@ class ExplorerTab(QWidget):
     # ==================== DATA LOADING ====================
     def load_file(self, file_name):
         try:
-            sc = SpectralCube.read(file_name).with_spectral_unit(u.km / u.s, velocity_convention='radio')
+            self.is_2d_image = False
+            try:
+                sc = SpectralCube.read(file_name).with_spectral_unit(u.km / u.s, velocity_convention='radio')
+            except Exception as e:
+                from astropy.io import fits
+                with fits.open(file_name) as hdul:
+                    data = np.squeeze(hdul[0].data)
+                    if data.ndim == 2:
+                        self.is_2d_image = True
+                        class MockData:
+                            def __init__(self, d): self._d = d
+                            @property
+                            def value(self): return np.expand_dims(self._d, axis=0)
+                            def __getitem__(self, key): return self
+                        class MockAxis:
+                            @property
+                            def value(self): return np.array([0.0])
+                        class MockCube:
+                            def __init__(self, d, h):
+                                self.header = h
+                                self.filled_data = MockData(d)
+                                self.spectral_axis = MockAxis()
+                        sc = MockCube(data, hdul[0].header)
+                    else:
+                        raise e
             
             raw_bunit = sc.header.get('BUNIT', 'Unknown').strip()
             self.display_unit = raw_bunit
@@ -2876,6 +2900,7 @@ class ExplorerTab(QWidget):
             mean_spectrum = np.nanmean(self.cube_clean, axis=(1, 2))
             brightest_ch = int(np.nanargmax(mean_spectrum))
             self.slider_channel.setValue(brightest_ch)
+            self.update_channel_map()
             self.v_line.show()
 
             v_min, v_max = np.nanmin(self.v_axis), np.nanmax(self.v_axis)
@@ -2911,6 +2936,7 @@ class ExplorerTab(QWidget):
             self.update_moment_maps()
             
             self.update_wcs_mode(self.parent_window.is_absolute_wcs)
+            self.set_2d_ui_state(self.is_2d_image)
             self.parent_window.update_menu_states()
             
             return True
@@ -2918,7 +2944,34 @@ class ExplorerTab(QWidget):
             QMessageBox.critical(self, "Error", f"Failed to load cube:\n{str(e)}")
             return False
 
+    def set_2d_ui_state(self, is_2d):
+        enable = not is_2d
+        
+        for btn in [self.btn_prev, self.btn_play_rev, self.btn_stop, self.btn_play_fwd, self.btn_next]:
+            btn.setEnabled(enable)
+            
+        self.slider_channel.setEnabled(enable)
+        self.input_channel_vel.setEnabled(enable)
+        self.btn_grid.setEnabled(enable)
+        self.toggle_bottom_btn.setEnabled(enable)
+        
+        if is_2d and getattr(self, 'bottom_container', None) is not None and self.bottom_container.isVisible():
+            if "Hide" in self.toggle_bottom_btn.text():
+                self.toggle_bottom_pane()
+            
+        model = self.combo_panel_mode.model()
+        spectrum_index = self.combo_panel_mode.findText("Spectrum")
+        if spectrum_index >= 0:
+            item = model.item(spectrum_index)
+            if item:
+                item.setEnabled(enable)
+                
+        if is_2d:
+            self.combo_panel_mode.setCurrentText("Spatial Analysis")
+
     def close_file(self):
+        self.set_2d_ui_state(False)
+        self.is_2d_image = False
         self.cube_clean = None
         self.fits_header_text = ""
         self.raw_header = None
@@ -4094,7 +4147,7 @@ class ExplorerTab(QWidget):
                 self.combo_spec_unit.setCurrentIndex(0) # Auto-switch to Native
 
     def update_spectrum(self):
-        if self.cube_clean is None: return
+        if self.cube_clean is None or getattr(self, 'is_2d_image', False): return
         stat = self.combo_spec_stat.currentText()
         
         active_rois = [r_dict for r_dict in self.spectrum_spatial_rois if r_dict["checkbox"].isChecked()]

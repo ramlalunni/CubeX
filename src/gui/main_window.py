@@ -239,6 +239,14 @@ class KinematicExplorerApp(QMainWindow):
             is_image = tab.last_clicked_panel_id != 'spectrum'
             self.action_save_fits.setEnabled(is_image)
             self.action_save_pdf.setEnabled(is_image)
+            
+            is_3d = not getattr(tab, 'is_2d_image', False)
+            for action in self.menuBar().findChildren(QAction):
+                text = action.text()
+                if text in ["Clear PV Cuts", "Clear Spectrum Regions"]:
+                    action.setEnabled(is_3d)
+                elif "spectrum" in text.lower() or "line database" in text.lower():
+                    action.setEnabled(is_3d)
 
     def toggle_wcs(self, checked):
         self.is_absolute_wcs = checked
