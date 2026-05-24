@@ -2724,7 +2724,6 @@ class ExplorerTab(QWidget):
             try:
                 sc = SpectralCube.read(file_name).with_spectral_unit(u.km / u.s, velocity_convention='radio')
             except Exception as e:
-                from astropy.io import fits
                 with fits.open(file_name) as hdul:
                     data = np.squeeze(hdul[0].data)
                     if data.ndim == 2:

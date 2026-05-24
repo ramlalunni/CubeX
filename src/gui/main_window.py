@@ -100,11 +100,11 @@ class KinematicExplorerApp(QMainWindow):
         # --- File Menu ---
         file_menu = menubar.addMenu('File')
         
-        action_load = QAction('Open FITS Cube', self)
+        action_load = QAction('Open FITS File', self)
         action_load.triggered.connect(self.load_file)
         file_menu.addAction(action_load)
 
-        action_close = QAction('Close FITS Cube', self)
+        action_close = QAction('Close FITS File', self)
         action_close.triggered.connect(self.close_cube)
         file_menu.addAction(action_close)
 
