@@ -1067,7 +1067,8 @@ class ExplorerTab(QWidget):
         input_layout = QHBoxLayout()
         input_layout.addWidget(QLabel("Statistic:"))
         self.combo_spec_stat = QComboBox()
-        self.combo_spec_stat.addItems(["Sum (Integrated)", "Mean", "Median", "Max (Peak)"])
+        self.combo_spec_stat.addItems(["Flux Density", "Mean", "Median", "Max (Peak)"])
+        self.combo_spec_stat.setCurrentText("Mean")
         self.combo_spec_stat.currentTextChanged.connect(self._update_spectrum_state_machine)
         self.combo_spec_stat.currentTextChanged.connect(self.update_spectrum)
         self.combo_spec_stat.currentTextChanged.connect(lambda: self.lbl_region_result.setText("---"))
@@ -2855,12 +2856,12 @@ class ExplorerTab(QWidget):
                 self.combo_spec_unit.model().item(2).setEnabled(False)
                 self.combo_spec_unit.setToolTip("Conversion disabled: Missing beam or frequency metadata in FITS.")
                 
-                sum_idx = self.combo_spec_stat.findText("Sum (Integrated)")
+                sum_idx = self.combo_spec_stat.findText("Flux Density")
                 if sum_idx != -1:
                     self.combo_spec_stat.model().item(sum_idx).setEnabled(False)
             else:
                 self.combo_spec_unit.setToolTip("")
-                sum_idx = self.combo_spec_stat.findText("Sum (Integrated)")
+                sum_idx = self.combo_spec_stat.findText("Flux Density")
                 if sum_idx != -1:
                     self.combo_spec_stat.model().item(sum_idx).setEnabled(True)
             
@@ -4039,7 +4040,7 @@ class ExplorerTab(QWidget):
 
     def _update_spectrum_state_machine(self):
         stat = self.combo_spec_stat.currentText()
-        if stat == "Sum (Integrated)":
+        if stat == "Flux Density":
             for i in range(self.combo_spec_unit.count()):
                 if self.combo_spec_unit.itemText(i) == "Jy":
                     self.combo_spec_unit.model().item(i).setEnabled(True)

@@ -60,7 +60,7 @@ class KinematicExplorerApp(QMainWindow):
         super().__init__()
         self.setWindowTitle("CubeX")
         screen = QDesktopWidget().availableGeometry()
-        w = min(screen.width(), 1600)
+        w = min(screen.width(), 1500)
         h = min(screen.height(), 600)
         self.startup_width = w
         self.startup_height = h
