@@ -4669,21 +4669,21 @@ class ExplorerTab(QWidget):
             bmin_arcsec = b['bmin'] * 3600.0
             bpa = b['bpa']
             
-            angle_rad = np.radians(bpa + 90.0)
+            angle_rad = np.radians(90.0 - bpa)
             cos_a, sin_a = np.cos(angle_rad), np.sin(angle_rad)
             
-            x_el = (bmin_arcsec / 2.0) * np.cos(t)
-            y_el = (bmaj_arcsec / 2.0) * np.sin(t)
+            x_el = (bmaj_arcsec / 2.0) * np.cos(t)
+            y_el = (bmin_arcsec / 2.0) * np.sin(t)
             x_rot = x_el * cos_a - y_el * sin_a
             y_rot = x_el * sin_a + y_el * cos_a
             
-            x_maj = np.array([0, 0])
-            y_maj = np.array([-bmaj_arcsec/2.0, bmaj_arcsec/2.0])
+            x_maj = np.array([-bmaj_arcsec/2.0, bmaj_arcsec/2.0])
+            y_maj = np.array([0, 0])
             x_maj_rot = x_maj * cos_a - y_maj * sin_a
             y_maj_rot = x_maj * sin_a + y_maj * cos_a
             
-            x_min = np.array([-bmin_arcsec/2.0, bmin_arcsec/2.0])
-            y_min = np.array([0, 0])
+            x_min = np.array([0, 0])
+            y_min = np.array([-bmin_arcsec/2.0, bmin_arcsec/2.0])
             x_min_rot = x_min * cos_a - y_min * sin_a
             y_min_rot = x_min * sin_a + y_min * cos_a
             
