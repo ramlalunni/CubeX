@@ -3400,7 +3400,55 @@ class ExplorerTab(QWidget):
                     static_2d = overlay_cube[0]
 
             cdelt2_o = overlay_header.get('CDELT2', None)
+            cdelt1_o = overlay_header.get('CDELT1', None)
             pix_scale_o = abs(float(cdelt2_o)) * 3600.0 if cdelt2_o else 1.0
+            
+            bmaj_array_o = None
+            bmin_array_o = None
+            freq_array_o = None
+            try:
+                if overlay_header.get('CTYPE3', '').startswith('FREQ'):
+                    freq_crval = overlay_header.get('CRVAL3')
+                    freq_cdelt = overlay_header.get('CDELT3')
+                    freq_crpix = overlay_header.get('CRPIX3')
+                    freq_array_o = freq_crval + (np.arange(nv_o) - (freq_crpix - 1)) * freq_cdelt
+                else:
+                    rf = overlay_header.get('RESTFRQ', overlay_header.get('RESTFREQ'))
+                    if rf and overlay_v is not None:
+                        freq_array_o = rf * (1.0 - (overlay_v * 1000.0) / const.c.value)
+
+                with fits.open(file_name) as hdul:
+                    is_mb = overlay_header.get('CASAMBM', 'F') == 'T' or 'BEAMS' in hdul
+                    if is_mb and 'BEAMS' in hdul:
+                        b_data = hdul['BEAMS'].data
+                        bmaj_raw = b_data['BMAJ']
+                        bmin_raw = b_data['BMIN']
+                        if len(bmaj_raw) == nv_o:
+                            bmaj_unit = hdul['BEAMS'].columns['BMAJ'].unit
+                            if bmaj_unit and 'deg' in str(bmaj_unit).lower():
+                                bmaj_array_o = bmaj_raw
+                                bmin_array_o = bmin_raw
+                            else:
+                                bmaj_array_o = bmaj_raw / 3600.0
+                                bmin_array_o = bmin_raw / 3600.0
+                        else:
+                            bmaj = overlay_header.get('BMAJ')
+                            bmin = overlay_header.get('BMIN')
+                            if bmaj and bmin:
+                                bmaj_array_o = np.full(nv_o, bmaj)
+                                bmin_array_o = np.full(nv_o, bmin)
+                    else:
+                        bmaj = overlay_header.get('BMAJ')
+                        bmin = overlay_header.get('BMIN')
+                        if bmaj and bmin:
+                            bmaj_array_o = np.full(nv_o, bmaj)
+                            bmin_array_o = np.full(nv_o, bmin)
+            except Exception:
+                bmaj = overlay_header.get('BMAJ')
+                bmin = overlay_header.get('BMIN')
+                if bmaj and bmin:
+                    bmaj_array_o = np.full(nv_o, bmaj)
+                    bmin_array_o = np.full(nv_o, bmin)
 
             corners_px = np.array([[0, 0], [self.nx - 1, 0], [0, self.ny - 1], [self.nx - 1, self.ny - 1]], dtype=float)
             ra_primary, dec_primary = primary_wcs.wcs_pix2world(corners_px, 0).T
@@ -3464,6 +3512,12 @@ class ExplorerTab(QWidget):
                 'nx': nx_o,
                 'ny': ny_o,
                 'pix_scale': pix_scale_o,
+                'cdelt1': cdelt1_o,
+                'cdelt2': cdelt2_o,
+                'bmaj_array': bmaj_array_o,
+                'bmin_array': bmin_array_o,
+                'freq_array': freq_array_o,
+                'display_unit': overlay_header.get('BUNIT', 'Unknown').strip(),
                 'iso_items': [],
                 'reproject_cache': None,
                 'options': default_opts.copy(),
@@ -4330,6 +4384,37 @@ class ExplorerTab(QWidget):
                     ov_spec = np.nansum(ov_sub_data, axis=(1, 2))
                 else:
                     ov_spec = np.nanmean(ov_sub_data, axis=(1, 2))
+
+                # Inject Jy and K conversion math for the overlay
+                unit_sel = self.combo_spec_unit.currentText()
+                unit_lower = ov.get('display_unit', 'Unknown').replace(" ", "").lower()
+                bmaj_o = ov.get('bmaj_array')
+                bmin_o = ov.get('bmin_array')
+                cd1 = ov.get('cdelt1')
+                cd2 = ov.get('cdelt2')
+                freq_o = ov.get('freq_array')
+                
+                can_convert = bmaj_o is not None and bmin_o is not None and cd1 and cd2
+                
+                with np.errstate(invalid='ignore', divide='ignore'):
+                    if unit_sel == "Jy" and "jy" in unit_lower:
+                        if can_convert and not ("pixel" in unit_lower or "pix" in unit_lower):
+                            om_pix = abs(cd1 * cd2) * (u.deg ** 2)
+                            om_beam = (np.pi * bmaj_o * bmin_o) / (4.0 * np.log(2.0)) * (u.deg ** 2)
+                            n_beam_arr = om_beam.to(u.sr) / om_pix.to(u.sr)
+                            ov_spec = ov_spec / n_beam_arr.value
+                        elif not can_convert and not ("pixel" in unit_lower or "pix" in unit_lower):
+                            print(f"WARNING: Overlay '{ov_name}' lacks beam metadata. Plotting in native units.")
+                    elif unit_sel == "K" and "jy" in unit_lower:
+                        if can_convert and freq_o is not None:
+                            om_pix = abs(cd1 * cd2) * (u.deg ** 2)
+                            om_beam = (np.pi * bmaj_o * bmin_o) / (4.0 * np.log(2.0)) * (u.deg ** 2)
+                            omega = om_pix if ("pixel" in unit_lower or "pix" in unit_lower) else om_beam
+                            sb = (ov_spec * u.Jy) / omega.to(u.sr)
+                            tb_array = sb.to(u.K, equivalencies=u.brightness_temperature(freq_o * u.Hz))
+                            ov_spec = tb_array.value
+                        else:
+                            print(f"WARNING: Overlay '{ov_name}' lacks beam metadata. Plotting in native units.")
 
                 ov_v = ov['v_axis']
                 ov_sort = np.argsort(ov_v)
