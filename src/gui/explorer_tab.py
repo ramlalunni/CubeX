@@ -1141,7 +1141,14 @@ class ExplorerTab(QWidget):
         main_layout.addLayout(top_half, stretch=1)
 
         # ==================== BOTTOM HALF ====================
-        self.bottom_half = QHBoxLayout()
+        self.toggle_bottom_btn = QPushButton("▼ Show Moment/PV Panels")
+        self.toggle_bottom_btn.setStyleSheet("QPushButton { border: none; color: #3498db; text-align: left; padding: 5px; font-weight: bold; background: transparent; } QPushButton:hover { color: #5dade2; }")
+        self.toggle_bottom_btn.clicked.connect(self.toggle_bottom_pane)
+        main_layout.addWidget(self.toggle_bottom_btn)
+
+        self.bottom_container = QWidget()
+        self.bottom_half = QHBoxLayout(self.bottom_container)
+        self.bottom_half.setContentsMargins(0, 0, 0, 0)
         self.bottom_half.setSpacing(6)
         self.panels = []
 
@@ -1283,7 +1290,8 @@ class ExplorerTab(QWidget):
             plot_item.scene().sigMouseMoved.connect(lambda pos, p=panel: self.hover_panel(pos, p))
             btn_pick.clicked.connect(lambda checked, p_id=i: self.set_active_picker(checked, p_id))
 
-        main_layout.addLayout(self.bottom_half, stretch=1)
+        self.bottom_container.setVisible(False)
+        main_layout.addWidget(self.bottom_container, stretch=1)
 
         self.set_active_panel('channel')
 
@@ -1299,6 +1307,36 @@ class ExplorerTab(QWidget):
         for p in self.panels:
             p['plot_item'].scene().sigMouseClicked.connect(lambda event, view=p['plot_item']: self.universal_click_handler(event, view))
 
+    def toggle_bottom_pane(self):
+        is_visible = self.bottom_container.isVisible()
+        main_win = self.window()
+        
+        from PyQt5.QtWidgets import QApplication
+        screen_height = QApplication.desktop().availableGeometry(main_win).height()
+        
+        if is_visible:
+            # Hiding the bottom pane
+            self.bottom_container.setVisible(False)
+            self.toggle_bottom_btn.setText("▼ Show Moment/PV Panels")
+            
+            if main_win.isMaximized():
+                main_win.showNormal()
+                
+            if hasattr(main_win, 'startup_width') and hasattr(main_win, 'startup_height'):
+                main_win.resize(main_win.startup_width, main_win.startup_height)
+            else:
+                main_win.resize(main_win.width(), main_win.height() // 2)
+        else:
+            # Showing the bottom pane
+            target_height = int(main_win.height() * 1.6)
+            
+            if screen_height > target_height:
+                main_win.resize(main_win.width(), target_height)
+            else:
+                main_win.showMaximized()
+                
+            self.bottom_container.setVisible(True)
+            self.toggle_bottom_btn.setText("▲ Hide Moment/PV Panels")
 
     def switch_panel_mode(self, mode):
         if mode == "Spectrum":
