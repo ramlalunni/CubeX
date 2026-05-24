@@ -148,16 +148,7 @@ class KinematicExplorerApp(QMainWindow):
         self.action_wcs.triggered.connect(self.toggle_wcs)
         view_menu.addAction(self.action_wcs)
         
-        view_menu.addSeparator()
-        
-        theme_menu = QMenu('Theme (Global)', self)
-        action_theme_dark = QAction('Dark Theme (Default)', self)
-        action_theme_dark.triggered.connect(lambda: self.set_theme('dark'))
-        action_theme_light = QAction('Light Theme', self)
-        action_theme_light.triggered.connect(lambda: self.set_theme('light'))
-        theme_menu.addAction(action_theme_dark)
-        theme_menu.addAction(action_theme_light)
-        view_menu.addMenu(theme_menu)
+
 
         # --- Tools Menu ---
         tools_menu = menubar.addMenu('Tools')
@@ -705,16 +696,6 @@ class KinematicExplorerApp(QMainWindow):
         if tab and tab.cube_clean is not None:
             tab.update_moment_maps()
             tab.update_channel_map()
-
-    def set_theme(self, theme):
-        if theme == 'dark':
-            pg.setConfigOption('background', '#121212')
-            pg.setConfigOption('foreground', '#e0e0e0')
-        else:
-            pg.setConfigOption('background', 'w')
-            pg.setConfigOption('foreground', 'k')
-        QMessageBox.information(self, "Theme Changed", f"Global theme set to {theme}. Open a new tab or window to see changes.")
-
     def show_manual(self):
         man = """
         <h3>CubeX User Manual</h3>
