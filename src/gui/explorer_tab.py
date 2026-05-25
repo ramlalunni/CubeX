@@ -257,7 +257,8 @@ class MomentWorker(QThread):
 
             # ---- Moment maps ----
             t    = cfg['threshold']
-            mask = (m0_raw > t)[np.newaxis, :, :]
+            # CRITICAL FIX: Evaluate the threshold against the 3D sub-cube voxel-by-voxel.
+            mask = selected_cube > t
             mc   = np.where(mask, selected_cube, np.nan)
             is_all_nan = np.isnan(mc).all()
 
@@ -704,10 +705,10 @@ class ExplorerTab(QWidget):
         self.polygon_points = []
         self.polygon_preview_line = None
         
-        self.region_colors = ['#00FF00', '#FF0000', '#FF00FF', '#FFA500', '#8A2BE2', '#FFFF00', '#DDA0DD', '#E9967A', '#FF1493', '#D2691E']
+        self.region_colors = ['#8A2BE2', '#FF0000', '#FFA500', '#228B22', '#FF00FF', '#FFFF00', '#DDA0DD', '#E9967A', '#0000CD', '#D2691E']
         self.roi_selected = False
         self.current_m0_raw = None
-        self.active_picker_panel = None 
+        self.active_picker_panel = None
         self.pv_data = None
         self.pv_offset_axis = None
         self.pv_velocity_axis = None
@@ -1392,7 +1393,82 @@ class ExplorerTab(QWidget):
             
             self.change_spatial_tool(self.combo_spatial_tool.currentText(), auto_draw=False)
 
+    def delete_nr_roi(self):
+        if getattr(self, 'nr_roi', None) is not None:
+            try:
+                if self.nr_roi.scene() is not None:
+                    self.view_channel.getView().removeItem(self.nr_roi)
+            except Exception: pass
+            self.nr_roi = None
+        if getattr(self, 'nr_label', None) is not None:
+            try:
+                if self.nr_label.scene() is not None:
+                    self.view_channel.getView().removeItem(self.nr_label)
+            except Exception: pass
+            self.nr_label = None
+        self.nr_roi_selected = False
+
+    def update_nr_rms(self):
+        if getattr(self, 'nr_roi', None) is None:
+            return
+        ch_idx = self.slider_channel.value()
+        if self.cube_clean is None or ch_idx < 0 or ch_idx >= self.cube_clean.shape[0]:
+            return
+            
+        current_slice = self.cube_clean[ch_idx, :, :]
+        r_pos = self.nr_roi.pos()
+        r_size = self.nr_roi.size()
+        
+        start_x = (self.nx / 2) * self.pix_scale_arcsec
+        start_y = -(self.ny / 2) * self.pix_scale_arcsec
+        
+        min_x_scene = min(r_pos.x(), r_pos.x() + r_size.x())
+        max_x_scene = max(r_pos.x(), r_pos.x() + r_size.x())
+        min_y_scene = min(r_pos.y(), r_pos.y() + r_size.y())
+        max_y_scene = max(r_pos.y(), r_pos.y() + r_size.y())
+        
+        x1_idx = int((min_x_scene - start_x) / (-self.pix_scale_arcsec))
+        x2_idx = int((max_x_scene - start_x) / (-self.pix_scale_arcsec))
+        y1_idx = int((min_y_scene - start_y) / self.pix_scale_arcsec)
+        y2_idx = int((max_y_scene - start_y) / self.pix_scale_arcsec)
+        
+        x_min = max(0, min(x1_idx, x2_idx))
+        x_max = min(self.nx, max(x1_idx, x2_idx) + 1)
+        y_min = max(0, min(y1_idx, y2_idx))
+        y_max = min(self.ny, max(y1_idx, y2_idx) + 1)
+        
+        if x_min >= x_max or y_min >= y_max:
+            return
+            
+        extracted_data = current_slice[x_min:x_max, y_min:y_max]
+        rms_val = 3.0 * float(np.nanstd(extracted_data))
+        
+        if np.isnan(rms_val):
+            val_str = "NaN"
+        else:
+            val_str = f"{rms_val:.4e}" if rms_val < 1e-3 else f"{rms_val:.4f}"
+            
+        if getattr(self, 'nr_label', None) is not None:
+            self.nr_label.setText(f"NR (3σ = {val_str})")
+            
+        pid = getattr(self.nr_roi, 'target_panel_id', None)
+        if pid is not None and 0 <= pid < len(self.panels):
+            target_panel = self.panels[pid]
+            if not np.isnan(rms_val):
+                target_panel['input_thresh'].setText(val_str)
+                self.update_moment_maps()
+
     def handle_escape(self):
+        if getattr(self, 'active_picker_panel', None) is not None:
+            pid = self.active_picker_panel
+            self.set_active_picker(False, pid)
+            if hasattr(self, 'panels') and pid < len(self.panels):
+                self.panels[pid]['btn_pick'].setChecked(False)
+            return
+        if getattr(self, 'nr_roi_selected', False):
+            self.delete_nr_roi()
+            return
+            
         if getattr(self, 'spatial_rois_to_delete', []):
             self.delete_selected_spatial_regions()
         if getattr(self, 'pv_cuts_to_delete', []):
@@ -2627,6 +2703,11 @@ class ExplorerTab(QWidget):
         for i, p in enumerate(self.panels):
             if i != panel_id: p['btn_pick'].setChecked(False)
         self.active_picker_panel = panel_id if checked else None
+        
+        if checked:
+            self.plot_channel.vb.setCursor(Qt.CrossCursor)
+        else:
+            self.plot_channel.vb.setCursor(Qt.ArrowCursor)
 
     def universal_click_handler(self, event, source_plot):
         if self.cube_clean is None: return
@@ -2697,27 +2778,53 @@ class ExplorerTab(QWidget):
                         event.accept()
             return
 
-        if self.active_picker_panel is not None and self.current_m0_raw is not None:
-            if event.button() == Qt.LeftButton:
-                pos = event.scenePos()
-                if source_plot.sceneBoundingRect().contains(pos):
-                    start_x = (self.nx / 2) * self.pix_scale_arcsec
-                    start_y = -(self.ny / 2) * self.pix_scale_arcsec
-                    x_idx = int((mp.x() - start_x) / (-self.pix_scale_arcsec))
-                    y_idx = int((mp.y() - start_y) / self.pix_scale_arcsec)
+        if self.active_picker_panel is not None:
+            if event.button() == Qt.LeftButton and source_plot == self.plot_channel:
+                self.plot_channel.vb.setCursor(Qt.ArrowCursor)
+                self.delete_nr_roi()
+                
+                w = 10.0 * abs(self.pix_scale_arcsec)
+                h = 10.0 * abs(self.pix_scale_arcsec)
+                
+                self.nr_roi = pg.RectROI([mp.x() - w/2, mp.y() - h/2], [w, h], pen=pg.mkPen('#00FFFF', width=2))
+                self.nr_roi.addScaleHandle([0, 0], [1, 1]); self.nr_roi.addScaleHandle([1, 1], [0, 0])
+                self.nr_roi.addScaleHandle([0, 1], [1, 0]); self.nr_roi.addScaleHandle([1, 0], [0, 1])
+                self.nr_roi.addScaleHandle([0.5, 0], [0.5, 1]); self.nr_roi.addScaleHandle([0.5, 1], [0.5, 0])
+                self.nr_roi.addScaleHandle([0, 0.5], [1, 0.5]); self.nr_roi.addScaleHandle([1, 0.5], [0, 0.5])
+                
+                make_roi_rotatable_with_ctrl(self.nr_roi)
                     
-                    if 0 <= x_idx < self.nx and 0 <= y_idx < self.ny:
-                        val = self.current_m0_raw[x_idx, y_idx]
-                        if not np.isnan(val):
-                            target_panel = self.panels[self.active_picker_panel]
-                            target_panel['input_thresh'].setText(f"{val:.4f}")
-                            target_panel['btn_pick'].setChecked(False)
-                            self.active_picker_panel = None
-                            self.update_moment_maps()
+                self.nr_label = pg.TextItem("NR", color='#00FFFF', anchor=(0, 1))
+                self.nr_label.setParentItem(self.nr_roi)
+                
+                self.view_channel.getView().addItem(self.nr_roi)
+                
+                self.nr_roi.target_panel_id = self.active_picker_panel
+                self.panels[self.active_picker_panel]['btn_pick'].setChecked(False)
+                self.active_picker_panel = None
+                
+                self.nr_roi.sigRegionChangeFinished.connect(self.update_nr_rms)
+                self.update_nr_rms()
             return 
             
         if source_plot == self.plot_channel:
             hit = False
+            
+            if getattr(self, 'nr_roi', None) is not None:
+                r_pos = self.nr_roi.pos()
+                r_size = self.nr_roi.size()
+                min_x = min(r_pos.x(), r_pos.x() + r_size.x())
+                max_x = max(r_pos.x(), r_pos.x() + r_size.x())
+                min_y = min(r_pos.y(), r_pos.y() + r_size.y())
+                max_y = max(r_pos.y(), r_pos.y() + r_size.y())
+                
+                if min_x <= mp.x() <= max_x and min_y <= mp.y() <= max_y:
+                    self.nr_roi.setPen(pg.mkPen('y', width=3))
+                    self.nr_roi_selected = True
+                    hit = True
+                    event.accept()
+                    return
+                    
             mode = self.combo_panel_mode.currentText()
             
             # Priority: check Spatial Analysis ROIs if in that mode
@@ -3324,6 +3431,27 @@ class ExplorerTab(QWidget):
         self.btn_contour_overlay.hide()
         self.parent_window.update_menu_states()
 
+    def clear_roi(self):
+        self.delete_nr_roi()
+        for item in getattr(self, 'spatial_rois', []):
+            if "update_spatial_label" in item and getattr(self, 'plot_channel', None) is not None:
+                try: item["roi"].sigRegionChanged.disconnect(item["update_spatial_label"])
+                except Exception: pass
+            roi = item['roi']
+            try: roi.sigRegionChanged.disconnect()
+            except Exception: pass
+            s = roi.scene()
+            if s is not None:
+                try: s.removeItem(roi)
+                except Exception: pass
+        self.spatial_rois = []
+        self.spatial_rois_to_delete = []
+        self.combo_spatial_regions.blockSignals(True)
+        self.combo_spatial_regions.clear()
+        self.combo_spatial_regions.addItem("None")
+        self.combo_spatial_regions.blockSignals(False)
+        self.lbl_region_result.setText("---")
+
     # --- DYNAMIC LINE CATALOG ENGINE ---
     def open_line_catalog(self):
         if self.cube_clean is None or self.rest_freq_hz is None:
@@ -3913,19 +4041,15 @@ class ExplorerTab(QWidget):
                 try:
                     if c.scene():
                         c.scene().removeItem(c)
-                    else:
-                        self.plot_widget.removeItem(c)
-                except Exception:
-                    pass
+                    else: self.plot_widget.removeItem(c)
+                except Exception: pass
             for name in list(self.overlay_spectrum_curves_smooth.keys()):
                 c = self.overlay_spectrum_curves_smooth.pop(name)
                 try:
                     if c.scene():
                         c.scene().removeItem(c)
-                    else:
-                        self.plot_widget_smooth.removeItem(c)
-                except Exception:
-                    pass
+                    else: self.plot_widget_smooth.removeItem(c)
+                except Exception: pass
         if not self.contour_overlays:
             self.btn_contour_overlay.setEnabled(False)
             self.btn_contour_overlay.hide()
@@ -4010,6 +4134,8 @@ class ExplorerTab(QWidget):
         self.draw_overlay_contours()
         self.update_spatial_analysis()
         self.update_beam_visualizers('channel')
+        if hasattr(self, 'update_nr_rms'):
+            self.update_nr_rms()
         
         grad = self.view_channel.ui.histogram.gradient
         ticks = list(grad.ticks.keys())
@@ -4285,6 +4411,7 @@ class ExplorerTab(QWidget):
         self.update_spectrum()
 
     def clear_roi(self):
+        self.delete_nr_roi()
         self.combo_roi.blockSignals(True)
         self.combo_roi.setCurrentText("Whole Map")
         self.combo_roi.blockSignals(False)
