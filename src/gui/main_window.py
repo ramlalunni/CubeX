@@ -27,10 +27,15 @@ class ExportRegionsDialog(QDialog):
             self.layout.addWidget(cb)
             
         self.single_file_cb = None
+        self.include_title_cb = None
         if is_pdf:
             self.single_file_cb = QCheckBox("Export to single file (overlaid)")
             self.single_file_cb.setChecked(False)
             self.layout.addWidget(self.single_file_cb)
+            
+            self.include_title_cb = QCheckBox("Include Plot Title in Export")
+            self.include_title_cb.setChecked(False)
+            self.layout.addWidget(self.include_title_cb)
             
         btn_layout = QHBoxLayout()
         btn_export = QPushButton("Export")
@@ -47,6 +52,9 @@ class ExportRegionsDialog(QDialog):
         
     def is_single_file(self):
         return self.single_file_cb.isChecked() if self.single_file_cb else False
+        
+    def is_include_title(self):
+        return self.include_title_cb.isChecked() if self.include_title_cb else True
 
 # Import the tab environment we built
 from src.gui.explorer_tab import ExplorerTab, _NUMBA_AVAILABLE
@@ -357,7 +365,41 @@ class KinematicExplorerApp(QMainWindow):
                     curves[name] = curves_dict[name]
         return curves
 
+    def _format_roi_props(self, roi):
+        import pyqtgraph as pg
+        if not roi: return "Whole Map"
+        if isinstance(roi, pg.EllipseROI) or isinstance(roi, pg.RectROI):
+            c = roi.pos() + roi.size()/2
+            a, b = roi.size()[0]/2, roi.size()[1]/2
+            pa = roi.angle()
+            rtype = "Ellipse" if isinstance(roi, pg.EllipseROI) else "Rectangle"
+            return f"{rtype} - Center({c.x():.2f}, {c.y():.2f}), a={a:.2f}, b={b:.2f}, PA={pa:.1f}"
+        else:
+            return "Custom Polygon"
+
+    def _get_save_pdf_filename_with_title_option(self, default_filename):
+        dialog = QFileDialog(self, "Save PDF", default_filename, "PDF Files (*.pdf)")
+        dialog.setOption(QFileDialog.DontUseNativeDialog, True)
+        dialog.setAcceptMode(QFileDialog.AcceptSave)
+        dialog.setDefaultSuffix("pdf")
+        
+        layout = dialog.layout()
+        chk_title = QCheckBox("Include Plot Title in Export")
+        chk_title.setChecked(False)
+        if layout:
+            try:
+                layout.addWidget(chk_title, layout.rowCount(), 0, 1, layout.columnCount())
+            except Exception:
+                layout.addWidget(chk_title)
+                
+        if dialog.exec_() == QFileDialog.Accepted:
+            files = dialog.selectedFiles()
+            if files:
+                return files[0], chk_title.isChecked()
+        return None, False
+
     def export_spectrum(self):
+        import os
         tab = self.get_active_tab()
         if tab and tab.cube_clean is not None:
             curves = self._get_active_spectrum_curves(tab)
@@ -374,21 +416,38 @@ class KinematicExplorerApp(QMainWindow):
                 else:
                     return
 
+            parent_filename = "cube"
+            if getattr(tab, 'current_file_name', None):
+                parent_filename = os.path.basename(tab.current_file_name)
+                
+            base_filename = os.path.splitext(parent_filename)[0]
+            region_name = regions_to_export[0].replace(' ', '_').lower() if regions_to_export else 'whole_map'
+            default_filename = f"{base_filename}_spectrum_{region_name}.csv"
+            
             options = QFileDialog.Options() | QFileDialog.DontUseNativeDialog
-            base_filename, _ = QFileDialog.getSaveFileName(self, "Save Spectrum CSV", "spectrum.csv", "CSV Files (*.csv)", options=options)
-            if base_filename:
+            save_path, _ = QFileDialog.getSaveFileName(self, "Save Spectrum CSV", default_filename, "CSV Files (*.csv)", options=options)
+            if save_path:
                 try:
                     sort_idx = np.argsort(tab.v_axis)
                     v_sorted = tab.v_axis[sort_idx]
                     
-                    if base_filename.endswith('.csv'):
-                        base_filename = base_filename[:-4]
+                    if save_path.endswith('.csv'):
+                        save_path = save_path[:-4]
+                    
+                    active_spatial = getattr(tab, 'spectrum_spatial_rois', [])
+                    roi_dict = {r["name"]: r.get("roi", None) for r in active_spatial}
                     
                     for name in regions_to_export:
                         curve = curves[name]
                         spec_sorted = curve.yData
-                        fname = f"{base_filename}_{name.replace(' ', '_')}.csv" if len(regions_to_export) > 1 else f"{base_filename}.csv"
+                        fname = f"{save_path}_{name.replace(' ', '_')}.csv" if len(regions_to_export) > 1 else f"{save_path}.csv"
+                        
+                        roi = roi_dict.get(name, None)
+                        roi_str = self._format_roi_props(roi)
+                        
                         with open(fname, mode='w', newline='') as file:
+                            file.write(f"# Filename: {parent_filename}\n")
+                            file.write(f"# Region: {roi_str}\n")
                             writer = csv.writer(file)
                             writer.writerow(["Velocity (km/s)", f"Flux ({tab.spec_unit})"])
                             for v, f in zip(v_sorted, spec_sorted): writer.writerow([v, f])
@@ -448,6 +507,7 @@ class KinematicExplorerApp(QMainWindow):
                 QMessageBox.critical(self, "Error", f"Failed to save FITS:\n{str(e)}")
 
     def export_spectrum_pdf(self):
+        import os
         tab = self.get_active_tab()
         if not tab or tab.cube_clean is None: return
         
@@ -465,15 +525,21 @@ class KinematicExplorerApp(QMainWindow):
             else:
                 return
                 
-        options = QFileDialog.Options() | QFileDialog.DontUseNativeDialog
-        base_filename, _ = QFileDialog.getSaveFileName(self, "Save Spectrum PDF", "spectrum.pdf", "PDF Files (*.pdf)", options=options)
-        if base_filename:
+        parent_filename = "cube"
+        if getattr(tab, 'current_file_name', None):
+            parent_filename = os.path.basename(tab.current_file_name)
+        base_filename = os.path.splitext(parent_filename)[0]
+        region_name = regions_to_export[0].replace(' ', '_').lower() if regions_to_export else 'whole_map'
+        default_filename = f"{base_filename}_spectrum_{region_name}.pdf"
+        
+        save_path, include_title = self._get_save_pdf_filename_with_title_option(default_filename)
+        if save_path:
             try:
                 sort_idx = np.argsort(tab.v_axis)
                 v_sorted = tab.v_axis[sort_idx]
                 
-                if base_filename.endswith('.pdf'):
-                    base_filename = base_filename[:-4]
+                if save_path.endswith('.pdf'):
+                    save_path = save_path[:-4]
                     
                 color_map = {}
                 if "Whole Map" in curves: color_map["Whole Map"] = '#3498db'
@@ -484,6 +550,9 @@ class KinematicExplorerApp(QMainWindow):
                     fig, ax = plt.subplots(figsize=(10, 5))
                     ax.set_xlabel('Radio Velocity (km/s)')
                     ax.set_ylabel(f'Flux ({tab.spec_unit})')
+                    
+                    if include_title:
+                        ax.set_title(f"{base_filename}_spectrum")
                     
                     for name in regions_to_export:
                         spec_sorted = curves[name].yData
@@ -501,7 +570,7 @@ class KinematicExplorerApp(QMainWindow):
                             ax.text(item.pos().x(), ymax, item.toPlainText(), 
                                     color='#e74c3c', rotation=90, verticalalignment='top', horizontalalignment='right')
                     
-                    fname = f"{base_filename}.pdf" if len(regions_to_export) > 1 else f"{base_filename}.pdf"
+                    fname = f"{save_path}.pdf" if len(regions_to_export) > 1 else f"{save_path}.pdf"
                     plt.savefig(fname, format='pdf', bbox_inches='tight')
                     plt.close(fig)
                 else:
@@ -509,6 +578,9 @@ class KinematicExplorerApp(QMainWindow):
                         fig, ax = plt.subplots(figsize=(10, 5))
                         ax.set_xlabel('Radio Velocity (km/s)')
                         ax.set_ylabel(f'Flux ({tab.spec_unit})')
+                        
+                        if include_title:
+                            ax.set_title(f"{base_filename}_spectrum_{name.replace(' ', '_').lower()}")
                         
                         spec_sorted = curves[name].yData
                         c = color_map.get(name, '#3498db')
@@ -523,7 +595,7 @@ class KinematicExplorerApp(QMainWindow):
                                 ax.text(item.pos().x(), ymax, item.toPlainText(), 
                                         color='#e74c3c', rotation=90, verticalalignment='top', horizontalalignment='right')
                                         
-                        fname = f"{base_filename}_{name.replace(' ', '_')}.pdf"
+                        fname = f"{save_path}_{name.replace(' ', '_')}.pdf"
                         plt.savefig(fname, format='pdf', bbox_inches='tight')
                         plt.close(fig)
                         
@@ -650,15 +722,21 @@ class KinematicExplorerApp(QMainWindow):
                 QMessageBox.critical(self, "Error", f"Failed to save FITS:\n{str(e)}")
 
     def export_pdf_active(self):
+        import os
         tab = self.get_active_tab()
         if not tab or tab.cube_clean is None: return
         target_id = tab.last_clicked_panel_id
         
         if target_id == 'spectrum': return
         
+        parent_filename = "cube"
+        if getattr(tab, 'current_file_name', None):
+            parent_filename = os.path.basename(tab.current_file_name)
+        base_filename = os.path.splitext(parent_filename)[0]
+        
         if target_id == 'channel':
             data = tab.get_current_channel_data()
-            title = f"Channel Map ({tab.slider_channel.value()})"
+            task = "channel"
             cbar_label = f"Flux ({tab.display_unit})"
             cmap_name = self.current_cmap
             levels = tab.ch_levels
@@ -666,7 +744,7 @@ class KinematicExplorerApp(QMainWindow):
             p = tab.panels[target_id]
             data = p['current_data']
             mtype = p['combo'].currentText()
-            title = mtype
+            task = mtype.replace(' ', '_').lower()
             cbar_label = p['view'].ui.histogram.axis.labelText
             is_vel = ("Moment 1" in mtype) or ("Moment 9" in mtype)
             cmap_name = 'bwr' if is_vel else self.current_cmap
@@ -674,8 +752,8 @@ class KinematicExplorerApp(QMainWindow):
 
         if data is None: return
         
-        options = QFileDialog.Options() | QFileDialog.DontUseNativeDialog
-        filename, _ = QFileDialog.getSaveFileName(self, "Save PDF", f"export.pdf", "PDF Files (*.pdf)", options=options)
+        default_filename = f"{base_filename}_{task}.pdf"
+        filename, include_title = self._get_save_pdf_filename_with_title_option(default_filename)
         if filename:
             try:
                 plot_data = data.T
@@ -684,6 +762,9 @@ class KinematicExplorerApp(QMainWindow):
                 if tab.is_absolute_wcs and tab.wcs_2d is not None:
                     fig, ax = plt.subplots(figsize=(8, 6), subplot_kw={'projection': tab.wcs_2d})
                     
+                    if include_title:
+                        ax.set_title(f"{base_filename}_{task}")
+                        
                     im = ax.imshow(plot_data, origin='lower', cmap=cmap_name, 
                                    vmin=levels[0], vmax=levels[1])
                                    
@@ -704,6 +785,9 @@ class KinematicExplorerApp(QMainWindow):
                 else:
                     fig, ax = plt.subplots(figsize=(8, 6))
                     
+                    if include_title:
+                        ax.set_title(f"{base_filename}_{task}")
+                        
                     extent = [tab.nx/2 * tab.pix_scale_arcsec, -tab.nx/2 * tab.pix_scale_arcsec, 
                               -tab.ny/2 * tab.pix_scale_arcsec, tab.ny/2 * tab.pix_scale_arcsec]
                     
