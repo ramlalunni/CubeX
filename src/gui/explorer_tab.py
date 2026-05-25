@@ -1081,7 +1081,17 @@ class ExplorerTab(QWidget):
         
         self.lbl_hover_spec = QLabel("")
         self.lbl_hover_spec.setStyleSheet("color: #aaa; font-size: 9.5px;")
-        spectrum_layout.addWidget(self.lbl_hover_spec)
+        
+        hover_layout = QHBoxLayout()
+        hover_layout.addWidget(self.lbl_hover_spec)
+        hover_layout.addStretch()
+        
+        self.lbl_rj_warning = QLabel("Warning: Brightness converted using the Rayleigh–Jeans approximation.")
+        self.lbl_rj_warning.setStyleSheet("color: orange; font-weight: normal;")
+        self.lbl_rj_warning.hide()
+        hover_layout.addWidget(self.lbl_rj_warning)
+        
+        spectrum_layout.addLayout(hover_layout)
 
         input_layout = QHBoxLayout()
         input_layout.addWidget(QLabel("Statistic:"))
@@ -4333,6 +4343,7 @@ class ExplorerTab(QWidget):
         stat = self.combo_spec_stat.currentText()
         unit_sel = self.combo_spec_unit.currentText()
         
+        is_rj_active = False
         with np.errstate(invalid='ignore', divide='ignore'):
             for r_dict in rois_to_plot:
                 roi = r_dict["roi"]
@@ -4384,6 +4395,7 @@ class ExplorerTab(QWidget):
                         final_array = flux_array_jy
                     elif "k" == unit_lower or "kelvin" in unit_lower:
                         # Path 3: Native K, Target Jy (Statistic: Sum)
+                        is_rj_active = True
                         freq_hz = self.freq_array
                         jy_sr_per_kelvin = (1 * u.K).to(u.Jy / u.sr, equivalencies=u.brightness_temperature(freq_hz * u.Hz))
                         flux_array_jy = raw_array * jy_sr_per_kelvin.value * self.omega_pix_sr.value
@@ -4398,6 +4410,7 @@ class ExplorerTab(QWidget):
                         final_array = raw_array
                     elif "jy" in unit_lower:
                         # Path 2: Native Jy/beam, Target K (Statistic: Mean, Median, Max)
+                        is_rj_active = True
                         omega = self.omega_pix_sr if ("pixel" in unit_lower or "pix" in unit_lower) else self.omega_beam_sr
                         surface_brightness = (raw_array * u.Jy) / omega
                         freq_hz = self.freq_array
@@ -4465,6 +4478,9 @@ class ExplorerTab(QWidget):
                                 self.spectrum_curves_smooth[name] = c_s
                                 self.plot_widget_smooth.addItem(c_s)
                             self.spectrum_curves_smooth[name].setData(x=ve, y=ss_smooth)
+
+        if hasattr(self, 'lbl_rj_warning'):
+            self.lbl_rj_warning.setVisible(is_rj_active)
 
         num_spatial_regions = len(active_rois)
         active_spatial_roi = active_rois[0]["roi"] if active_rois else None
