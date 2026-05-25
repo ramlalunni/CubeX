@@ -1393,7 +1393,13 @@ class ExplorerTab(QWidget):
             self.combo_roi.hide()
             self.lbl_spatial_tool.show()
             self.combo_spatial_tool.show()
-            self.change_spatial_tool(self.combo_spatial_tool.currentText())
+            
+            if not getattr(self, 'spatial_rois', []):
+                self.combo_spatial_tool.blockSignals(True)
+                self.combo_spatial_tool.setCurrentText("None")
+                self.combo_spatial_tool.blockSignals(False)
+            
+            self.change_spatial_tool(self.combo_spatial_tool.currentText(), auto_draw=False)
 
     def handle_escape(self):
         if getattr(self, 'spatial_rois_to_delete', []):
@@ -1677,7 +1683,7 @@ class ExplorerTab(QWidget):
             )
             panel['lbl_hover'].setStyleSheet("color: #3498db; font-weight: bold; font-size: 9.5px;")
 
-    def change_spatial_tool(self, tool):
+    def change_spatial_tool(self, tool, auto_draw=True):
         if self.cube_clean is None: return
         
         if tool == "None":
@@ -1706,6 +1712,9 @@ class ExplorerTab(QWidget):
             self.stacked_spatial_info.setCurrentIndex(1)
             self.spatial_stats_scroll.show()
             self.stacked_spatial_info.show()
+
+        if not auto_draw:
+            return
 
         # Auto-draw default shape
         sz = self.nx * self.pix_scale_arcsec * 0.15
