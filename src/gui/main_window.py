@@ -553,14 +553,97 @@ class KinematicExplorerApp(QMainWindow):
         filename, _ = QFileDialog.getSaveFileName(self, "Save FITS", f"{name}.fits", "FITS Files (*.fits)", options=options)
         if filename:
             try:
+                import numpy as np
+                from astropy.wcs import WCS
+                from astropy.io import fits
+                
                 export_data = data.T 
                 hdu = fits.PrimaryHDU(export_data)
-                hdu.header['BUNIT'] = bunit
+                
+                panel_type = name.replace("_", " ") if target_id != 'channel' else "Channel Map"
+                
+                # Step 1: Base Metadata Inheritance
                 if tab.raw_header is not None:
-                    for key in ['CTYPE1', 'CRVAL1', 'CDELT1', 'CRPIX1', 'CUNIT1', 
-                                'CTYPE2', 'CRVAL2', 'CDELT2', 'CRPIX2', 'CUNIT2', 'RESTFRQ', 'OBJECT']:
+                    for key in ['OBJECT', 'TELESCOP', 'INSTRUME', 'OBSERVER', 'DATE-OBS', 'RESTFRQ', 'RADESYS', 'EQUINOX']:
                         if key in tab.raw_header:
                             hdu.header[key] = tab.raw_header[key]
+                hdu.header['HISTORY'] = f"Exported from CubeX: {panel_type}"
+                
+                # Step 2: Panel-Specific WCS & Dimensionality
+                if tab.raw_header is not None:
+                    orig_wcs = WCS(tab.raw_header)
+                    if panel_type == "PV Diagram":
+                        # Construct new 2D WCS for PV Diagram
+                        new_wcs = WCS(naxis=2)
+                        new_wcs.wcs.ctype = ['OFFSET', orig_wcs.wcs.ctype[2]]
+                        
+                        if hasattr(tab, 'panels') and target_id in tab.panels:
+                            dx = tab.panels[target_id].get('dx', 1.0)
+                            dv = tab.panels[target_id].get('dv', 1.0)
+                            offsets = tab.panels[target_id].get('offsets', [0])
+                            v_sorted = tab.panels[target_id].get('v_sorted', [0])
+                            new_wcs.wcs.cdelt = [dx, dv]
+                            new_wcs.wcs.crpix = [1, 1]
+                            new_wcs.wcs.crval = [offsets[0] * 3600.0 if orig_wcs.wcs.cunit[0] == 'deg' else offsets[0], v_sorted[0]]
+                            new_wcs.wcs.cunit = ['arcsec', orig_wcs.wcs.cunit[2] if len(orig_wcs.wcs.cunit) > 2 else 'km/s']
+                        hdu.header.update(new_wcs.to_header())
+                    else:
+                        # Sliced 2D WCS for Channel/Moment Maps
+                        new_wcs = orig_wcs.celestial
+                        hdu.header.update(new_wcs.to_header())
+                    
+                # Step 3: Dynamic BUNIT Translation
+                if panel_type == "Moment 0":
+                    bunit = f"{tab.display_unit} km/s"
+                elif panel_type in ["Moment 1", "Moment 2", "Moment 9"]:
+                    bunit = "km/s"
+                elif panel_type in ["Channel Map", "Moment 8", "PV Diagram"]:
+                    bunit = tab.display_unit
+                hdu.header['BUNIT'] = bunit
+                
+                # Step 4: Beam Metadata Handling
+                if panel_type != "PV Diagram":
+                    if hasattr(tab, 'bmaj_array') and tab.bmaj_array is not None:
+                        # Multi-beam or single beam array
+                        if len(tab.bmaj_array) > 1:
+                            if panel_type == "Channel Map":
+                                c_idx = tab.slider_channel.value()
+                                bmaj = tab.bmaj_array[c_idx]
+                                bmin = tab.bmin_array[c_idx]
+                                bpa = tab.bpa_array[c_idx] if tab.bpa_array is not None else 0.0
+                            else:
+                                # Moment Map: Median over selected velocity range
+                                minX, maxX = tab.region.getRegion()
+                                search_axis = tab.v_axis if tab.v_axis[0] < tab.v_axis[-1] else tab.v_axis[::-1]
+                                idx_min = np.searchsorted(search_axis, minX)
+                                idx_max = np.searchsorted(search_axis, maxX)
+                                if tab.v_axis[0] > tab.v_axis[-1]:
+                                    idx_min, idx_max = len(tab.v_axis) - idx_max, len(tab.v_axis) - idx_min
+                                if idx_max > idx_min:
+                                    bmaj = float(np.nanmedian(tab.bmaj_array[idx_min:idx_max]))
+                                    bmin = float(np.nanmedian(tab.bmin_array[idx_min:idx_max]))
+                                    bpa_vals = tab.bpa_array[idx_min:idx_max] if tab.bpa_array is not None else [0.0]
+                                    bpa = float(np.nanmedian(bpa_vals))
+                                else:
+                                    idx_safe = min(idx_min, len(tab.bmaj_array)-1)
+                                    bmaj = float(tab.bmaj_array[idx_safe])
+                                    bmin = float(tab.bmin_array[idx_safe])
+                                    bpa = float(tab.bpa_array[idx_safe]) if tab.bpa_array is not None else 0.0
+                        else:
+                            bmaj = float(tab.bmaj_array[0])
+                            bmin = float(tab.bmin_array[0])
+                            bpa = float(tab.bpa_array[0]) if tab.bpa_array is not None else 0.0
+                            
+                        hdu.header['BMAJ'] = bmaj
+                        hdu.header['BMIN'] = bmin
+                        hdu.header['BPA'] = bpa
+                    else:
+                        # Fallback for single beam in raw header
+                        if tab.raw_header is not None:
+                            for key in ['BMAJ', 'BMIN', 'BPA']:
+                                if key in tab.raw_header:
+                                    hdu.header[key] = tab.raw_header[key]
+
                 hdu.writeto(filename, overwrite=True)
                 self.statusBar().showMessage(f"Saved FITS: {filename}")
             except Exception as e:
