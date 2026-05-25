@@ -659,27 +659,6 @@ class SpectrumViewBox(pg.ViewBox):
             super().mouseDragEvent(ev, axis)
 
     def mouseClickEvent(self, ev):
-        if ev.modifiers() == Qt.ControlModifier:
-            pos = self.mapSceneToView(ev.scenePos())
-            if self.parent_tab:
-                hit = False
-                for item in self.parent_tab.spectrum_rois:
-                    roi = item["roi"]
-                    r_pos = roi.pos()
-                    r_size = roi.size()
-                    min_x = min(r_pos.x(), r_pos.x() + r_size.x())
-                    max_x = max(r_pos.x(), r_pos.x() + r_size.x())
-                    
-                    # Spectrum ROIs are conceptually 1D velocity bands. 
-                    # We allow clicking anywhere in the vertical column (ignoring Y bounds)
-                    # so the user doesn't have to click exactly inside a potentially flat box.
-                    if min_x <= pos.x() <= max_x:
-                        self.parent_tab.select_region_for_deletion(roi)
-                        hit = True
-                        
-                if hit:
-                    ev.accept()
-                    return
         super().mouseClickEvent(ev)
 
 class ExplorerTab(QWidget):
@@ -2684,10 +2663,26 @@ class ExplorerTab(QWidget):
                 self.cancel_polygon()
             return
 
-        if source_plot == self.plot_widget:
-            if event.button() == Qt.LeftButton and event.modifiers() == Qt.NoModifier:
-                idx = (np.abs(self.v_axis - mp.x())).argmin()
-                self.slider_channel.setValue(idx)
+        if source_plot in (self.plot_widget, getattr(self, 'plot_widget_smooth', None)):
+            if event.button() == Qt.LeftButton:
+                if event.modifiers() == Qt.NoModifier:
+                    idx = (np.abs(self.v_axis - mp.x())).argmin()
+                    self.slider_channel.setValue(idx)
+                elif event.modifiers() == Qt.ControlModifier:
+                    hit = False
+                    if hasattr(self, 'spectrum_rois') and self.spectrum_rois:
+                        for item in self.spectrum_rois:
+                            roi = item["roi"]
+                            r_pos = roi.pos()
+                            r_size = roi.size()
+                            min_x = min(r_pos.x(), r_pos.x() + r_size.x())
+                            max_x = max(r_pos.x(), r_pos.x() + r_size.x())
+                            if min_x <= mp.x() <= max_x:
+                                self.select_region_for_deletion(roi)
+                                hit = True
+                                break
+                    if hit:
+                        event.accept()
             return
 
         if self.active_picker_panel is not None and self.current_m0_raw is not None:
