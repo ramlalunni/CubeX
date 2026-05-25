@@ -1105,7 +1105,7 @@ class ExplorerTab(QWidget):
         
         input_layout.addWidget(QLabel("Unit:"))
         self.combo_spec_unit = QComboBox()
-        self.combo_spec_unit.addItems(["Native", "Jy", "K"])
+        self.combo_spec_unit.addItems(["Native", "Jy", "K", "Jy/beam"])
         self.combo_spec_unit.currentTextChanged.connect(self.update_spectrum)
         input_layout.addWidget(self.combo_spec_unit)
         
@@ -2934,15 +2934,26 @@ class ExplorerTab(QWidget):
                 self.can_convert_units = False
             
             native_label = f"Native ({raw_bunit})" if raw_bunit != 'Unknown' else "Native"
-            self.combo_spec_unit.setItemText(0, native_label)
+            unit_lower = raw_bunit.replace(" ", "").lower()
+            
+            new_units = [native_label, "Jy"]
+            if not ("k" == unit_lower or "kelvin" in unit_lower):
+                new_units.append("K")
+            if not ("jy" in unit_lower and "pixel" not in unit_lower and "pix" not in unit_lower):
+                new_units.append("Jy/beam")
+                
+            self.combo_spec_unit.blockSignals(True)
+            self.combo_spec_unit.clear()
+            self.combo_spec_unit.addItems(new_units)
+            self.combo_spec_unit.blockSignals(False)
             
             if not self.can_convert_units:
                 self.combo_spec_unit.blockSignals(True)
                 self.combo_spec_unit.setCurrentIndex(0)
                 self.combo_spec_unit.blockSignals(False)
                 
-                self.combo_spec_unit.model().item(1).setEnabled(False)
-                self.combo_spec_unit.model().item(2).setEnabled(False)
+                for i in range(1, self.combo_spec_unit.count()):
+                    self.combo_spec_unit.model().item(i).setEnabled(False)
                 self.combo_spec_unit.setToolTip("Conversion disabled: Missing beam or frequency metadata in FITS.")
                 
                 sum_idx = self.combo_spec_stat.findText("Flux Density")
@@ -4303,7 +4314,7 @@ class ExplorerTab(QWidget):
                 self.combo_spec_unit.setCurrentIndex(1) # Auto-switch to Jy
         else:
             for i in range(self.combo_spec_unit.count()):
-                if "Native" in self.combo_spec_unit.itemText(i) or self.combo_spec_unit.itemText(i) == "K":
+                if "Native" in self.combo_spec_unit.itemText(i) or self.combo_spec_unit.itemText(i) in ["K", "Jy/beam"]:
                     self.combo_spec_unit.model().item(i).setEnabled(True)
                 else:
                     self.combo_spec_unit.model().item(i).setEnabled(False)
@@ -4420,6 +4431,21 @@ class ExplorerTab(QWidget):
                         final_array = raw_array
                     y_label = f"{stat} (K)"
                     self.spec_unit = "K"
+                elif unit_sel == "Jy/beam":
+                    if "jy" in unit_lower and ("pixel" not in unit_lower and "pix" not in unit_lower):
+                        # Path 4: Native Jy/beam, Target Jy/beam
+                        final_array = raw_array
+                    elif "k" == unit_lower or "kelvin" in unit_lower:
+                        # Path 5: Native K, Target Jy/beam
+                        is_rj_active = True
+                        freq_hz = self.freq_array
+                        jy_sr_per_kelvin = (1 * u.K).to(u.Jy / u.sr, equivalencies=u.brightness_temperature(freq_hz * u.Hz))
+                        surface_brightness_jy_sr = raw_array * jy_sr_per_kelvin.value
+                        final_array = surface_brightness_jy_sr * self.omega_beam_sr.value
+                    else:
+                        final_array = raw_array
+                    y_label = f"{stat} (Jy/beam)"
+                    self.spec_unit = "Jy/beam"
                     
                 spec = final_array
                     
