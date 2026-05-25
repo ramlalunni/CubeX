@@ -233,6 +233,26 @@ class ContourDialog(QDialog):
         mode_layout.addWidget(self.rad_pct)
         layout.addWidget(mode_group)
 
+        is_vel = False
+        if self.target_tab is not None and self.target_id is not None and self.target_id != 'channel':
+            try:
+                mtype = self.target_tab.panels[self.target_id]['combo'].currentText()
+                if "Moment 1" in mtype or "Moment 9" in mtype:
+                    is_vel = True
+            except Exception:
+                pass
+
+        if is_vel:
+            self.rad_rms.setEnabled(False)
+            self.rad_log.setEnabled(False)
+            disabled_style = ("QRadioButton { color: gray; } "
+                              "QRadioButton::indicator { width: 14px; height: 14px; border-radius: 7px; "
+                              "border: 2px solid #555; background-color: #2a2a2a; } ")
+            self.rad_rms.setStyleSheet(disabled_style)
+            self.rad_log.setStyleSheet(disabled_style)
+            if opts.get('mode', 'percent') in ['log', 'rms']:
+                opts['mode'] = 'percent'
+                
         self.stack = QStackedWidget()
 
         page_rms = QWidget()

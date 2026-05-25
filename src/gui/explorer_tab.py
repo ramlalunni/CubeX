@@ -274,6 +274,8 @@ class MomentWorker(QThread):
                     else:
                         mc_f64 = np.ascontiguousarray(mc, dtype=np.float64)
                         data, _ = _compute_moments_12(mc_f64, sub_v_f64)
+                        # Filter out physically impossible centroids caused by division by near-zero sums
+                        data[(data < minX - 1e-5) | (data > maxX + 1e-5)] = np.nan
                     levels   = (minX, maxX)
                     unit_str = 'km/s'
 
@@ -3747,13 +3749,25 @@ class ExplorerTab(QWidget):
         result[valid] = vals
         return result
 
-    def _compute_contour_levels(self, data, options):
+    def _compute_contour_levels(self, data, options, target_id=None):
         if data is None:
             return []
         valid = data[np.isfinite(data)]
         if len(valid) == 0:
             return []
+            
         mode = options.get('mode', 'rms')
+        lo = float(np.nanmin(valid))
+        hi = float(np.nanmax(valid))
+        
+        is_vel = False
+        if target_id is not None and target_id != 'channel':
+            try:
+                mtype = self.panels[target_id]['combo'].currentText()
+                if "Moment 1" in mtype or "Moment 9" in mtype:
+                    is_vel = True
+            except:
+                pass
 
         if mode == 'rms':
             rms = options.get('rms', 0.001)
@@ -3764,25 +3778,32 @@ class ExplorerTab(QWidget):
                 mults = [3, 5, 10, 20]
             levels = [mean_val + m * rms for m in mults]
         elif mode == 'linear':
-            lo = options.get('lin_min', float(np.nanmin(valid)))
-            hi = options.get('lin_max', float(np.nanmax(valid)))
+            u_lo = options.get('lin_min', lo)
+            u_hi = options.get('lin_max', hi)
             n = max(int(options.get('n_levels', 5)), 1)
-            levels = np.linspace(lo, hi, n).tolist()
+            levels = np.linspace(u_lo, u_hi, n).tolist()
         elif mode == 'log':
-            lo = max(options.get('log_min', 0.001), 1e-12)
-            hi = max(options.get('log_max', 10.0), lo * 1.01)
-            n = max(int(options.get('n_levels', 5)), 1)
-            base = options.get('log_base', 10.0)
-            log_lo = np.log(lo) / np.log(base)
-            log_hi = np.log(hi) / np.log(base)
-            levels = np.logspace(log_lo, log_hi, n, base=base).tolist()
+            pos_data = valid[valid > 0]
+            if len(pos_data) == 0 or is_vel:
+                n = max(int(options.get('n_levels', 5)), 1)
+                levels = np.linspace(lo, hi, n).tolist()
+            else:
+                min_pos = np.nanmin(pos_data)
+                n = max(int(options.get('n_levels', 5)), 1)
+                base = options.get('log_base', 10.0)
+                log_lo = np.log(min_pos) / np.log(base)
+                log_hi = np.log(hi) / np.log(base)
+                levels = np.logspace(log_lo, log_hi, n, base=base).tolist()
         elif mode == 'percent':
-            peak = float(np.nanmax(valid))
             try:
                 pcts = [float(x.strip()) for x in options.get('percentages_str', '10,30,50,70,90').split(',') if x.strip()]
             except ValueError:
                 pcts = [10, 30, 50, 70, 90]
-            levels = [peak * p / 100.0 for p in pcts]
+                
+            if is_vel:
+                levels = [lo + (hi - lo) * (p / 100.0) for p in pcts]
+            else:
+                levels = [max(0, hi) * (p / 100.0) for p in pcts]
         else:
             levels = []
 
@@ -3949,9 +3970,14 @@ class ExplorerTab(QWidget):
             mask = smooth_mask > 0.01
             smoothed = np.where(mask, smoothed / np.where(mask, smooth_mask, 1.0), np.nan)
 
-        levels = self._compute_contour_levels(smoothed, params)
+        levels = self._compute_contour_levels(smoothed, params, target_id=target_id)
         if not levels:
             return
+
+        min_level = min(levels)
+        fill_value = min_level - 999.0
+        clean_data = np.copy(smoothed)
+        clean_data[~np.isfinite(clean_data)] = fill_value
 
         color_name = params.get('color', 'cyan').lower()
         qcolor = pg.mkColor(color_name)
@@ -3963,7 +3989,7 @@ class ExplorerTab(QWidget):
         pen = pg.mkPen(qcolor, width=lw, style=style)
 
         for lvl in levels:
-            iso = pg.IsocurveItem(data=smoothed, level=lvl, pen=pen)
+            iso = pg.IsocurveItem(data=clean_data, level=lvl, pen=pen)
             iso.setParentItem(view.getImageItem())
             iso.setZValue(10)
             self.active_contours[target_id].append(iso)
