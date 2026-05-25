@@ -150,7 +150,8 @@ def _compute_moments_12_numpy(mc, v_axis):
         m2 = np.sqrt(np.maximum(sum_wv2 / m0_safe - m1 ** 2, 0.0))
     return m1, m2
 
-if _NUMBA_AVAILABLE:
+# TODO: Numba temporarily bypassed due to catastrophic cancellation precision issues in Moment 2 variance math. Fix in next update.
+if False: # _NUMBA_AVAILABLE:
     _compute_moments_12 = _compute_moments_12_numba
 else:
     _compute_moments_12 = _compute_moments_12_numpy

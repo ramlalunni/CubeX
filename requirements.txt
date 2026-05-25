@@ -16,7 +16,8 @@ pyqtgraph
 matplotlib
 qtawesome
 
+# TODO: Numba is currently bypassed to fall back to numpy due to bugs. This should be fixed in a future update.
 # --- Optional ---
 # Install for faster PV diagram computation (2-5x speedup on large cubes).
 # The app works fully without it — falls back to pure NumPy automatically.
-numba
+# numba
