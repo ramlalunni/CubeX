@@ -844,13 +844,6 @@ class ExplorerTab(QWidget):
         self.combo_roi.activated[str].connect(self.change_roi)
         roi_layout.addWidget(self.combo_roi)
         
-        self.btn_edit_region = QPushButton("Edit region")
-        self.btn_edit_region.setFixedHeight(22)
-        self.btn_edit_region.setStyleSheet("font-size: 11px; padding: 0px 4px;")
-        self.btn_edit_region.hide()
-        self.btn_edit_region.clicked.connect(self.open_edit_region_dialog)
-        roi_layout.addWidget(self.btn_edit_region)
-
         self.lbl_spatial_tool = QLabel("Spatial Analysis Tool:")
         roi_layout.addWidget(self.lbl_spatial_tool)
         self.combo_spatial_tool = QComboBox()
@@ -858,6 +851,13 @@ class ExplorerTab(QWidget):
         self.combo_spatial_tool.addItems(["None", "Point", "Line", "Rectangle", "Ellipse"])
         self.combo_spatial_tool.currentTextChanged.connect(self.change_spatial_tool)
         roi_layout.addWidget(self.combo_spatial_tool)
+        
+        self.btn_edit_region = QPushButton("Edit region")
+        self.btn_edit_region.setFixedHeight(22)
+        self.btn_edit_region.setStyleSheet("font-size: 11px; padding: 0px 4px;")
+        self.btn_edit_region.hide()
+        self.btn_edit_region.clicked.connect(self.open_edit_region_dialog)
+        roi_layout.addWidget(self.btn_edit_region)
         
         self.lbl_spatial_tool.hide()
         self.combo_spatial_tool.hide()
