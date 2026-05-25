@@ -4082,19 +4082,36 @@ class ExplorerTab(QWidget):
             r_dict["checkbox"].blockSignals(False)
             r_dict["roi"].setPen(pg.mkPen(r_dict["color"], width=2))
             
-        name = f"Region {len(self.spectrum_spatial_rois) + 1}"
+        name = f"SR{len(self.spectrum_spatial_rois) + 1}"
         cb = QCheckBox(name)
         cb.setChecked(True)
         cb.setStyleSheet(f"color: {col}; font-weight: bold;")
         cb.toggled.connect(self.update_spectrum)
         self.box_regions_layout.addWidget(cb)
         
+        text_item = pg.TextItem(text=name, color=col, anchor=(0, 1))
+        text_item.setZValue(30)
+        self.view_channel.addItem(text_item)
+        
+        def update_spectrum_region_label(r=new_roi, t=text_item):
+            try:
+                br = r.boundingRect()
+                pos = r.pos()
+                t.setPos(pos.x() + br.right(), pos.y() + br.bottom())
+            except Exception:
+                pass
+
+        new_roi.sigRegionChanged.connect(update_spectrum_region_label)
+        update_spectrum_region_label()
+        
         self.spectrum_spatial_rois.append({
             "name": name,
             "roi": new_roi,
             "checkbox": cb,
             "color": col,
-            "type": roi_type
+            "type": roi_type,
+            "text_item": text_item,
+            "update_label": update_spectrum_region_label
         })
         self.roi_selected = True
         self.active_spatial_spectrum_roi = new_roi
@@ -4116,6 +4133,14 @@ class ExplorerTab(QWidget):
                 cb = r_dict["checkbox"]
                 self.box_regions_layout.removeWidget(cb)
                 cb.deleteLater()
+                
+                if "text_item" in r_dict:
+                    text_item = r_dict["text_item"]
+                    if text_item.scene():
+                        text_item.scene().removeItem(text_item)
+                    else:
+                        self.view_channel.getView().removeItem(text_item)
+                        
                 # Remove from dicts and plot items
                 if r_dict["name"] in self.spectrum_curves:
                     c = self.spectrum_curves.pop(r_dict["name"])
@@ -4132,10 +4157,13 @@ class ExplorerTab(QWidget):
                 
         # Rename remaining to be contiguous
         for i, r_dict in enumerate(self.spectrum_spatial_rois):
-            new_name = f"Region {i + 1}"
+            new_name = f"SR{i + 1}"
             old_name = r_dict["name"]
             r_dict["name"] = new_name
             r_dict["checkbox"].setText(new_name)
+            
+            if "text_item" in r_dict:
+                r_dict["text_item"].setText(new_name)
             
             if old_name in self.spectrum_curves:
                 self.spectrum_curves[new_name] = self.spectrum_curves.pop(old_name)
@@ -5067,12 +5095,12 @@ class ExplorerTab(QWidget):
                 if np.isfinite(y):
                     val_str = f'{y:.3e}' if (abs(y) < 1e-3 and abs(y) > 0) else f'{y:.4g}'
                     
-                    if name.startswith("Region"):
+                    if name.startswith("SR"):
                         try:
-                            # Extract number, handling "Region 1" or "Region1"
-                            num_str = name.replace("Region", "").strip()
+                            # Extract number, handling "SR 1" or "SR1"
+                            num_str = name.replace("SR", "").strip()
                             num = int(num_str)
-                            display = f"R{num}"
+                            display = f"SR{num}"
                             sort_key = (1, num) # Group 1 for Regions
                         except:
                             display = name[:2].upper()
