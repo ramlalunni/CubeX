@@ -512,6 +512,52 @@ class ChannelMapViewBox(pg.ViewBox):
                         if len(handles) > 1:
                             self.current_roi.movePoint(handles[1], current_pos)
                     ev.accept()
+            elif mode == "Spectrum":
+                tool = self.parent_tab.combo_roi.currentText()
+                if tool in ["Whole Map", "Point (Beam)", "Custom Polygon"]:
+                    ev.ignore()
+                    return
+                
+                if ev.isStart():
+                    self.drag_start = self.mapSceneToView(ev.buttonDownScenePos())
+                    if tool == "Rectangle":
+                        self.current_roi = pg.RectROI([self.drag_start.x(), self.drag_start.y()], [1e-5, 1e-5], pen=pg.mkPen('#f1c40f'))
+                        self.current_roi.addScaleHandle([0, 0], [1, 1])
+                        self.current_roi.addScaleHandle([1, 1], [0, 0])
+                        self.current_roi.addScaleHandle([0, 1], [1, 0])
+                        self.current_roi.addScaleHandle([1, 0], [0, 1])
+                        self.current_roi.addScaleHandle([0.5, 0], [0.5, 1])
+                        self.current_roi.addScaleHandle([0.5, 1], [0.5, 0])
+                        self.current_roi.addScaleHandle([0, 0.5], [1, 0.5])
+                        self.current_roi.addScaleHandle([1, 0.5], [0, 0.5])
+                        make_roi_rotatable_with_ctrl(self.current_roi)
+                    elif tool == "Ellipse":
+                        self.current_roi = pg.EllipseROI([self.drag_start.x(), self.drag_start.y()], [1e-5, 1e-5], pen=pg.mkPen('#f1c40f'))
+                        self.current_roi.addScaleHandle([0, 0], [1, 1])
+                        self.current_roi.addScaleHandle([1, 1], [0, 0])
+                        self.current_roi.addScaleHandle([0, 1], [1, 0])
+                        self.current_roi.addScaleHandle([1, 0], [0, 1])
+                        self.current_roi.addScaleHandle([0.5, 0], [0.5, 1])
+                        self.current_roi.addScaleHandle([0.5, 1], [0.5, 0])
+                        self.current_roi.addScaleHandle([0, 0.5], [1, 0.5])
+                        self.current_roi.addScaleHandle([1, 0.5], [0, 0.5])
+                        make_roi_rotatable_with_ctrl(self.current_roi)
+                    
+                    if self.current_roi:
+                        self.addItem(self.current_roi)
+                        ev.accept()
+                elif ev.isFinish():
+                    if self.current_roi:
+                        self.parent_tab._finish_roi_addition(self.current_roi, tool)
+                        self.current_roi = None
+                    ev.accept()
+                else:
+                    if self.current_roi:
+                        current_pos = self.mapSceneToView(ev.scenePos())
+                        w = current_pos.x() - self.drag_start.x()
+                        h = current_pos.y() - self.drag_start.y()
+                        self.current_roi.setSize([w, h])
+                    ev.accept()
             else:
                 super().mouseDragEvent(ev, axis)
         else:
@@ -557,6 +603,13 @@ class ChannelMapViewBox(pg.ViewBox):
                         self.parent_tab.select_pv_cut(item["roi"])
                         ev.accept()
                         return
+            elif mode == "Spectrum":
+                tool = self.parent_tab.combo_roi.currentText()
+                if tool == "Point (Beam)":
+                    pos = self.mapSceneToView(ev.scenePos())
+                    self.parent_tab.change_roi(tool, cx=pos.x(), cy=pos.y())
+                    ev.accept()
+                    return
                 
         super().mouseClickEvent(ev)
 
@@ -3942,7 +3995,7 @@ class ExplorerTab(QWidget):
         else: 
             self.stop_playback()
 
-    def change_roi(self, roi_type):
+    def change_roi(self, roi_type, cx=None, cy=None):
         if self.cube_clean is None: return
         
         if roi_type == "Whole Map":
@@ -3956,7 +4009,11 @@ class ExplorerTab(QWidget):
         num_rois = len(getattr(self, 'spectrum_spatial_rois', []))
         sz = self.nx * self.pix_scale_arcsec * 0.2
         offset = num_rois * sz * 0.15
-        cx, cy = offset, offset
+        
+        if cx is None:
+            cx = offset
+        if cy is None:
+            cy = offset
         
         if hasattr(self, 'btn_edit_region'):
             if roi_type in ["Ellipse", "Rectangle", "Point (Beam)", "Custom Polygon"]:
