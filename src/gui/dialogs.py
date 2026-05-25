@@ -992,10 +992,13 @@ class RegionPropertiesDialog(QDialog):
 # ==============================================================================
 # SPECTRAL SMOOTHING DIALOG
 # ==============================================================================
+from PyQt5.QtCore import pyqtSignal
+
 class SpectralSmoothingDialog(QDialog):
     """
     Dialog to select spectral smoothing method and parameters.
     """
+    apply_clicked = pyqtSignal(dict)
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Spectral Smoothing")
@@ -1064,12 +1067,17 @@ class SpectralSmoothingDialog(QDialog):
         btn_apply = QPushButton("Apply")
         btn_apply.setStyleSheet("background-color: #27ae60; font-weight: bold; color: white;")
         btn_cancel = QPushButton("Cancel")
-        btn_apply.clicked.connect(self.accept)
+        btn_apply.clicked.connect(self._on_apply)
         btn_cancel.clicked.connect(self.reject)
         btn_layout.addStretch()
         btn_layout.addWidget(btn_apply)
         btn_layout.addWidget(btn_cancel)
         layout.addLayout(btn_layout)
+        
+    def _on_apply(self):
+        params = self.get_params()
+        if params:
+            self.apply_clicked.emit(params)
         
     def validate_savgol(self, value):
         if value % 2 == 0:

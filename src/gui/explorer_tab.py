@@ -1063,6 +1063,11 @@ class ExplorerTab(QWidget):
         
         self.spectrum_tabs = QTabWidget()
         self.spectrum_tabs.addTab(self.plot_widget, "Original")
+        self.spectrum_tabs.setTabsClosable(True)
+        self.spectrum_tabs.tabCloseRequested.connect(self._on_spectrum_tab_close_requested)
+        from PyQt5.QtWidgets import QTabBar
+        self.spectrum_tabs.tabBar().setTabButton(0, QTabBar.RightSide, None)
+        self.spectrum_tabs.tabBar().setTabButton(0, QTabBar.LeftSide, None)
         self.spectrum_tabs.tabBar().hide()
         spectrum_layout.addWidget(self.spectrum_tabs)
         
@@ -1115,12 +1120,6 @@ class ExplorerTab(QWidget):
         self.btn_smooth = QPushButton("Smooth")
         self.btn_smooth.clicked.connect(self.open_smoothing_dialog)
         input_layout.addWidget(self.btn_smooth)
-        
-        self.btn_remove_smooth = QPushButton("Remove Smoothed")
-        self.btn_remove_smooth.clicked.connect(self.remove_smoothed_spectrum)
-        self.btn_remove_smooth.hide()
-        input_layout.addWidget(self.btn_remove_smooth)
-        
         input_layout.addStretch()
         input_layout.addWidget(QLabel("Min Vel:"))
         self.input_vmin = QLineEdit("0.00")
@@ -1479,6 +1478,12 @@ class ExplorerTab(QWidget):
             self.remove_spatial_spectrum_roi(self.active_spatial_spectrum_roi)
             self.active_spatial_spectrum_roi = None
     def open_smoothing_dialog(self):
+        # Prevent multiple instances
+        if getattr(self, '_smooth_dialog_active', False) and hasattr(self, '_smooth_dialog') and self._smooth_dialog:
+            self._smooth_dialog.raise_()
+            self._smooth_dialog.activateWindow()
+            return
+            
         # Mutual exclusion: warn if Edit Region dialog is open
         if getattr(self, '_region_dialog', None) and self._region_dialog.isVisible():
             msg = QMessageBox(self.window())
@@ -1490,23 +1495,32 @@ class ExplorerTab(QWidget):
             self._region_dialog.raise_()
             self._region_dialog.activateWindow()
             return
+            
         from src.gui.dialogs import SpectralSmoothingDialog
         self._smooth_dialog_active = True
-        try:
-            dialog = SpectralSmoothingDialog(self.window())
-            dialog.setWindowModality(Qt.WindowModal)
-            if dialog.exec_():
-                params = dialog.get_params()
-                if params:
-                    self.smoothing_params = params
-                    if self.spectrum_tabs.indexOf(self.plot_widget_smooth) == -1:
-                        self.spectrum_tabs.addTab(self.plot_widget_smooth, "Smoothed")
-                    self.spectrum_tabs.tabBar().show()
-                    self.spectrum_tabs.setCurrentWidget(self.plot_widget_smooth)
-                    self.btn_remove_smooth.show()
-                    self.update_spectrum()
-        finally:
+        
+        self._smooth_dialog = SpectralSmoothingDialog(self.window())
+        self._smooth_dialog.setWindowModality(Qt.NonModal)
+        
+        def on_apply(params):
+            self.smoothing_params = params
+            if self.spectrum_tabs.indexOf(self.plot_widget_smooth) == -1:
+                self.spectrum_tabs.addTab(self.plot_widget_smooth, "Smoothed")
+            self.spectrum_tabs.tabBar().show()
+            self.spectrum_tabs.setCurrentWidget(self.plot_widget_smooth)
+            self.update_spectrum()
+            
+        def on_close():
             self._smooth_dialog_active = False
+            self._smooth_dialog = None
+            
+        self._smooth_dialog.apply_clicked.connect(on_apply)
+        self._smooth_dialog.finished.connect(on_close)
+        self._smooth_dialog.show()
+
+    def _on_spectrum_tab_close_requested(self, index):
+        if self.spectrum_tabs.widget(index) == self.plot_widget_smooth:
+            self.remove_smoothed_spectrum()
 
     def remove_smoothed_spectrum(self):
         self.smoothing_params = None
@@ -1515,7 +1529,6 @@ class ExplorerTab(QWidget):
             self.spectrum_tabs.removeTab(idx)
         self.spectrum_tabs.tabBar().hide()
         self.spectrum_tabs.setCurrentWidget(self.plot_widget)
-        self.btn_remove_smooth.hide()
         self._on_spectrum_tab_changed()
         self.update_spectrum()
 
@@ -1538,11 +1551,6 @@ class ExplorerTab(QWidget):
     def _on_spectrum_tab_changed(self):
         current_widget = self.spectrum_tabs.currentWidget()
         if not current_widget: return
-        
-        if current_widget == getattr(self, 'plot_widget_smooth', None):
-            self.btn_remove_smooth.show()
-        else:
-            self.btn_remove_smooth.hide()
             
         self.update_region_ui_visibility()
         self.rename_regions()
