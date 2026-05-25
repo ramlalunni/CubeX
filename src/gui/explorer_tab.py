@@ -265,8 +265,12 @@ class MomentWorker(QThread):
 
             with np.errstate(invalid='ignore', divide='ignore'):
                 if 'Moment 0' in mtype:
-                    data = m0_raw.copy()
-                    data[data == 0] = np.nan
+                    if is_all_nan:
+                        data = np.full(m0_raw.shape, np.nan)
+                    else:
+                        dv = np.abs(sub_v[1] - sub_v[0]) if len(sub_v) > 1 else 1.0
+                        data = np.nansum(mc, axis=0) * dv
+                        data[np.nansum(np.isfinite(mc), axis=0) == 0] = np.nan
                     levels   = (0, float(np.nanmax(data)) if not np.isnan(data).all() else 1.0)
                     unit_str = f"{display_unit} km/s"
 
@@ -1617,7 +1621,7 @@ class ExplorerTab(QWidget):
                 panel['btn_pick'].setChecked(False)
                 self.active_picker_panel = None
         else:
-            panel['aux_stack'].setVisible("Moment 0" not in mode)
+            panel['aux_stack'].setVisible(True)
 
     def get_pv_cut_by_name(self, name):
         for item in self.pv_cuts:
