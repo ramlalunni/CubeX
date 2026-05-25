@@ -5087,7 +5087,7 @@ class ExplorerTab(QWidget):
             if mtype != 'PV Diagram':
                 self.configure_bottom_panel_axes(p, is_pv=False)
                 p['plot_item'].setTitle('')
-                is_vel = ('Moment 1' in mtype) or ('Moment 2' in mtype) or ('Moment 9' in mtype)
+                is_vel = ('Moment 1' in mtype) or ('Moment 9' in mtype)
                 self.apply_cmap(p['view'], is_vel)
             self.update_beam_visualizers('moment', panel_id=i)
 
