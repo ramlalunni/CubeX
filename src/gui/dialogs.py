@@ -1345,7 +1345,37 @@ class ChannelGridDialog(QDialog):
         self.hist.gradient.restoreState(main_hist.gradient.saveState())
         
     def export_to_pdf(self):
-        filename, _ = QFileDialog.getSaveFileName(self, "Save PDF", "channel_grid.pdf", "PDF Files (*.pdf)")
+        import os
+        parent_filename = "cube"
+        if getattr(self.tab, 'current_file_name', None):
+            parent_filename = os.path.basename(self.tab.current_file_name)
+        base_filename = os.path.splitext(parent_filename)[0]
+        default_filename = f"{base_filename}_channel_map_grid.pdf"
+        
+        dialog = QFileDialog(self, "Save PDF", default_filename, "PDF Files (*.pdf)")
+        dialog.setOption(QFileDialog.DontUseNativeDialog, True)
+        dialog.setAcceptMode(QFileDialog.AcceptSave)
+        dialog.setDefaultSuffix("pdf")
+        
+        layout = dialog.layout()
+        chk_title = QCheckBox("Include Plot Title in Export")
+        chk_title.setChecked(False)
+        if layout:
+            try:
+                layout.addWidget(chk_title, layout.rowCount(), 0, 1, layout.columnCount())
+            except Exception:
+                layout.addWidget(chk_title)
+                
+        if dialog.exec_() != QFileDialog.Accepted:
+            return
+            
+        files = dialog.selectedFiles()
+        if not files:
+            return
+            
+        filename = files[0]
+        include_title = chk_title.isChecked()
+        
         if filename:
             try:
                 cube, v_axis, minX, maxX = self.tab.get_velocity_subset(use_full_range=False)
@@ -1358,6 +1388,9 @@ class ChannelGridDialog(QDialog):
                 
                 fig, axes = plt.subplots(rows, cols, figsize=(cols*3, rows*3), squeeze=False)
                 
+                if include_title:
+                    fig.suptitle(f"{base_filename}_channel_map_grid", fontsize=16)
+                    
                 levels = self.hist.getLevels()
                 cmap_name = self.tab.parent_window.current_cmap
                 
