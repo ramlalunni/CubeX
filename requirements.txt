@@ -1,13 +1,22 @@
+# --- Core Scientific & Data Processing ---
 numpy
 scipy
 pandas
-matplotlib
+
+# --- Astropy Ecosystem ---
 astropy
 astroquery
 spectral-cube
+regions
+asdf
+
+# --- GUI & Visualization ---
 pyqt5
 pyqtgraph
+matplotlib
+qtawesome
 
-## Optional: install for faster PV diagram computation (2-5x speedup on large cubes).
-## The app works fully without it — falls back to pure NumPy automatically.
-# numba
+# --- Optional ---
+# Install for faster PV diagram computation (2-5x speedup on large cubes).
+# The app works fully without it — falls back to pure NumPy automatically.
+numba
