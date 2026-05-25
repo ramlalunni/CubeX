@@ -723,7 +723,7 @@ class ExplorerTab(QWidget):
         self.polygon_points = []
         self.polygon_preview_line = None
         
-        self.region_colors = ['#2ecc71', '#fd6b6b', '#9b59b6', '#e74c3c', '#e67e22', '#1abc9c', '#e84393', '#fd79a8', '#00b894', '#a29bfe']
+        self.region_colors = ['#00FF00', '#FF0000', '#FF00FF', '#FFA500', '#8A2BE2', '#FFFF00', '#DDA0DD', '#E9967A', '#FF1493', '#D2691E']
         self.roi_selected = False
         self.current_m0_raw = None
         self.active_picker_panel = None 
