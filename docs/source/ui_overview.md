@@ -1,25 +1,27 @@
-# UI Overview
+# The CubeX UI
 
-The CubeX graphical interface is engineered to maximize screen real estate while keeping all critical analysis tools immediately accessible. The application utilizes a multi-tabbed interface, allowing you to load and explore multiple FITS data cubes simultaneously. 
+The graphical interface is engineered to maximize data visibility while keeping analytical tools readily accessible.
 
-## The Main Window Layout
-The core workspace for any loaded cube is divided into three primary zones:
+<!-- HTML COMMENT PLACEHOLDER: Insert screenshot of the full CubeX GUI layout -->
 
-### 1. Channel Map (Top-Left)
-This panel displays the 2D spatial slice of your data cube. 
-* **Controls:** Includes a playback slider to step through velocity channels, and a sophisticated histogram/colormap widget to adjust image scaling dynamically.
-* **Interactions:** This is your canvas for drawing spatial regions (ROIs), dropping the minimum-intensity threshold dropper, and drawing Position-Velocity (PV) cuts.
+## Menu bar
+Located at the very top of the window.
+- **File:** Load primary FITS cubes, attach 2D FITS images as contour overlays, or export your current visualizer state to a PDF.
+- **View:** Toggle the visibility of the bottom auxiliary panels, reset zoom states, or change color themes.
+- **Info:** Inspect the raw FITS header metadata for the active dataset.
 
-### 2. Spectral / Spatial Profiler (Top-Right)
-This dynamically shifting panel adapts based on your selected mode:
-* **Spectrum Mode:** Plots the 1D spectrum extracted from the ROIs drawn on the Channel Map. Contains tools for Splatalogue queries, spectral smoothing, and the blue "Velocity Range" selector.
-* **Spatial Analysis Mode:** Plots the 1D spatial cross-sections (X/Y profiles) or spatial statistics for the active channel.
+## Panels (Channel map, Spectrum, Spatial Analysis, Moment/PV)
+The workspace is divided into three primary zones:
 
-### 3. Auxiliary Analysis Panels (Bottom Row)
-The bottom half of the screen contains three identical, independent auxiliary panels. By default, they display Moment 0, Moment 8, and Moment 1 maps. 
-* Use the dropdown menus at the bottom of each panel to instantly switch them between any supported Moment Map or a Position-Velocity Diagram.
+1. **Channel Map (Top-Left):** The primary 2D spatial canvas. Displays the active velocity channel or 2D image. Use this panel to adjust visual limits (via the histogram), playback velocity channels, and draw interaction ROIs.
+2. **Spectral / Spatial Profiler (Top-Right):** A dynamically shifting panel that adapts based on the active mode (Spectrum or Spatial Analysis). 
+3. **Auxiliary Analysis Panels (Bottom Row):** Three independent viewers at the bottom of the screen. Each can independently render any Moment Map (0, 1, 2, 8, 9) or a Position-Velocity (PV) Diagram.
 
-## Menus & Toolbars
-* **File:** Load primary FITS cubes, load Contour Overlay FITS files, or export your current visualizer states to a PDF report.
-* **View:** Toggle the visibility of the bottom auxiliary panels to maximize the primary 2D/1D viewers.
-* **Info:** View the raw FITS header metadata for the active dataset.
+## Tabs
+CubeX utilizes a multi-tabbed interface. Every loaded FITS file opens in its own isolated tab ("Explorer Tab"). You can switch between independent datasets freely without losing your visual state, drawn ROIs, or loaded overlays.
+
+## Pop-up windows
+Additional analysis tools open as floating, non-blocking dialogs. 
+- **Splatalogue Query:** For searching rest frequencies.
+- **Channel Grid Visualizer:** A tiled viewer showing sequential velocity slices.
+- **Contour Config:** Controls RMS multipliers, levels, and line styling for overlaid contours.

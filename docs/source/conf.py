@@ -18,7 +18,14 @@ release = 'v0.3-preview'
 extensions = [
     'myst_parser',
     'sphinx.ext.autodoc',
-    'sphinx_rtd_theme'
+    'sphinx_rtd_theme',
+    'sphinx.ext.mathjax'
+]
+
+# Enable MyST math rendering extensions
+myst_enable_extensions = [
+    "dollarmath",
+    "amsmath"
 ]
 
 templates_path = ['_templates']

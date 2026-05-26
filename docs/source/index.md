@@ -12,34 +12,12 @@ CubeX allows astronomers to seamlessly bridge the gap between 2D channel maps an
 
 ```{toctree}
 :maxdepth: 2
-:caption: Introduction & Installation
+:caption: Table of Contents
 
+introduction
 installation
-```
-
-```{toctree}
-:maxdepth: 2
-:caption: The User Interface
-
 ui_overview
-file_loading
-```
-
-```{toctree}
-:maxdepth: 2
-:caption: Core Analysis Tools
-
-moment_maps
-pv_diagrams
-spectral_analysis
-spatial_analysis
-splatalogue_query
-```
-
-```{toctree}
-:maxdepth: 2
-:caption: Tutorials & Support
-
-tutorial
-troubleshooting
+working_with_cubex
+tutorials
+faq_troubleshooting
 ```

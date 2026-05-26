@@ -1,39 +1,44 @@
 # Installation
 
-CubeX is designed to be as accessible as possible. Depending on your needs, you can either download the pre-compiled, standalone application (recommended for most astronomers) or install it from source if you wish to modify the code.
+CubeX provides flexible deployment options. Depending on your needs, you can either download a pre-compiled standalone executable or install it from source.
 
 ## Option 1: Standalone Application (Recommended)
-For users who want to avoid managing Python environments or dependencies, we provide pre-compiled executables that bundle the entire Python ecosystem into a single app. 
+For most users, the standalone application is the simplest way to get started. It bundles Python and all required dependencies into a single executable file.
 
 1. Navigate to the **Releases** page on the CubeX GitHub repository.
-2. Download the appropriate executable for your operating system:
-   * **Linux:** Download `CubeX-Linux`. Make the file executable (`chmod +x CubeX-Linux`) and run it.
-   * **macOS:** *Note: The standalone macOS `.dmg` application will be provided soon. Currently, only a Linux executable is actively distributed.*
-3. No further setup is required!
+2. Download the appropriate executable for your operating system (e.g., `CubeX-Linux`).
+3. Make the file executable and run it:
+   ```bash
+   chmod +x CubeX-Linux
+   ./CubeX-Linux
+   ```
 
 ## Option 2: Developer / Source Code
-If you want to contribute to the project, modify the codebase, or run CubeX on an unsupported OS architecture, you can run the application directly from the Python source.
+If you wish to modify the code, run on an unsupported OS architecture, or contribute to the project, you can install CubeX from source.
 
-**Prerequisites:** Python 3.9 or higher.
+**Prerequisites:** Python 3.9+
 
 1. **Clone the repository:**
    ```bash
    git clone https://github.com/yourusername/CubeX.git
    cd CubeX
    ```
-2. **Create a virtual environment (Recommended):**
+
+2. **Create and activate a virtual environment:**
    ```bash
    python3 -m venv venv
    source venv/bin/activate
    ```
+
 3. **Install the dependencies:**
-   CubeX relies heavily on `PyQt5`, `pyqtgraph`, `astropy`, `spectral-cube`, and optionally `numba` for accelerated moment math.
+   CubeX requires `PyQt5`, `pyqtgraph`, `astropy`, `spectral-cube`, `astroquery`, `pandas`, and optionally `numba` for accelerated spatial interpolation.
    ```bash
    pip install -r requirements.txt
    ```
+
 4. **Run the Application:**
    ```bash
    python main.py
-   # Or use the provided bash wrapper:
+   # Or use the provided wrapper script:
    ./CubeX.sh
    ```
