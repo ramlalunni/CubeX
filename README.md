@@ -53,7 +53,7 @@ After installation, you can launch the CubeX GUI directly from your terminal:
 The comprehensive CubeX User Manual, including UI tutorials and details of the background methods CubeX uses, is hosted on ReadTheDocs, at
 📖 **[CubeX Documentation](https://cubex.readthedocs.io)**.
 
-> [!CAUTION]
+> [!NOTE]
 > The current documentation is an experimental draft, and is under construction. <u>It is incomplete, and contains known errors</u>. **<span style="color: red;">DO NOT USE</span>** this documentation as an official reference until this warning is removed in a future update.
 
 
