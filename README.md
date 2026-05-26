@@ -16,7 +16,7 @@ CubeX streamlines advanced interferometric data visualisation and analysis by pr
 
 CubeX is available as a packaged application for Linux and macOS, or can be installed as a standard Python package via `pip`.
 > [!NOTE]
-> **NOTE: The standalone macOS application will be provided soon. Currently only a Linux executable is available**.
+> **The standalone macOS application will be provided soon. Currently only a Linux executable is available**.
 
 ### Option 1: Standalone Application (Recommended)
 For users who prefer not to manage Python environments or dependencies, we provide pre-compiled, double-click executables for Linux and macOS. These bundle the entire Python ecosystem into a single app.
@@ -39,7 +39,7 @@ pip install -r requirements.txt
 ```
 
 Linux users may need to install system `Qt5` libraries (e.g., `sudo apt install python3-pyqt5` or `libxcb-*` packages) if UI rendering fails.  
-*(Note: You can also use the included `./install.sh` script to install CubeX after automatically configuring a standalone Python environment and installing all dependencies, on Linux/MacOS systems).*
+*(You can also use the included `./install.sh` script to install CubeX after automatically configuring a standalone Python environment and installing all dependencies, on Linux/MacOS systems).*
 
 ## Quickstart
 After installation, you can launch the CubeX GUI directly from your terminal:
@@ -54,7 +54,7 @@ The comprehensive CubeX User Manual, including UI tutorials and details of the b
 📖 **[CubeX Documentation](https://cubex.readthedocs.io)**.
 
 > [!CAUTION]
-> The current documentation is an experimental draft, and is under construction. <u>It is incomplete, and contains known errors</u>. **<span style="color: red;">DO NOT USE</span>** this documentation as an official reference until this warning is removed in a future update.
+> The current documentation is an experimental draft, and is under construction. It is incomplete, and contains known errors. **DO NOT USE** this documentation as an official reference until this warning is removed in a future update.
 
 
 ## Contributing & Support
