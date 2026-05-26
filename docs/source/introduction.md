@@ -1,6 +1,6 @@
 # Introduction to CubeX
 
-Welcome to **CubeX**, a high-performance, interactive visualization and analysis suite engineered for radio astronomy spectral data cubes. Built to handle modern, high-resolution datasets, CubeX provides astronomers with a powerful interface to seamlessly bridge the gap between 2D channel maps and 1D spectral/spatial profiles.
+Welcome to **CubeX**, a high-performance, interactive visualization and analysis suite engineered for radio astronomy spectral data cubes. Built to handle modern, high-resolution datasets, CubeX provides astronomers with a powerful interface with all the necessary tools to view and analyze interferometric cubes and images.
 
 ## Core Capabilities
 

@@ -14,7 +14,8 @@ CubeX streamlines advanced interferometric data visualisation and analysis by pr
 
 ## Installation
 
-CubeX is available as a packaged application for Linux and macOS, or can be installed as a standard Python package via `pip`. </br>**<span style="color: orange;">NOTE: The standalone macOS application will be provided soon. Currently only a Linux executable is available</span>**.
+CubeX is available as a packaged application for Linux and macOS, or can be installed as a standard Python package via `pip`. </br>[!WARNING]
+**NOTE: The standalone macOS application will be provided soon. Currently only a Linux executable is available**.
 
 ### Option 1: Standalone Application (Recommended)
 For users who prefer not to manage Python environments or dependencies, we provide pre-compiled, double-click executables for Linux and macOS. These bundle the entire Python ecosystem into a single app.
@@ -50,6 +51,10 @@ After installation, you can launch the CubeX GUI directly from your terminal:
 ## Documentation
 The comprehensive CubeX User Manual, including UI tutorials and details of the background methods CubeX uses, is hosted on ReadTheDocs, at
 📖 **[CubeX Documentation](https://cubex.readthedocs.io)**.
+
+[!WARNING]
+The current documentation is an experimental draft, and is under construction. <u>It is incomplete, and contains known errors</u>. **<span style="color: red;">DO NOT USE</span>** this documentation as an official reference until this warning is removed in a future update.
+
 
 ## Contributing & Support
 We welcome community contributions. If you encounter a bug or have a feature request, please [open an issue](https://github.com/ramlalunni/CubeX/issues) on GitHub. Pull requests for new analysis tools or optimizations are also encouraged.

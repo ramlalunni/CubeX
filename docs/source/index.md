@@ -8,7 +8,7 @@ This documentation is an experimental draft, and is currently under construction
 
 ## Overview
 
-CubeX allows astronomers to seamlessly bridge the gap between 2D channel maps and 1D spectral profiles. By offering real-time moment map generation, interactive Position-Velocity (PV) slices, and integrated Splatalogue line querying, CubeX accelerates the data exploration workflow.
+By offering real-time moment map generation, interactive Position-Velocity (PV) slices, and integrated Splatalogue line querying, CubeX accelerates the data exploration workflow.
 
 ```{toctree}
 :maxdepth: 2
