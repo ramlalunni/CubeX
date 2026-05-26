@@ -30,4 +30,7 @@ exclude_patterns = []
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#options-for-html-output
 
 html_theme = 'sphinx_rtd_theme'
+html_css_files = ['custom.css']
 html_static_path = ['_static']
+
+myst_heading_anchors = 3

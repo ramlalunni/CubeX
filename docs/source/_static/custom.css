@@ -1,0 +1,28 @@
+/* 1. Force the permalink icon to show up on the main Page Title (H1) */
+.wy-nav-content h1 .headerlink {
+    display: inline-block !important;
+    opacity: 0.8;
+}
+
+/* 2. OPTIONAL: Make the text itself clickable, not just the icon */
+/* This expands the invisible link box over the entire header text */
+h1,
+h2,
+h3,
+h4 {
+    position: relative;
+}
+
+h1 .headerlink,
+h2 .headerlink,
+h3 .headerlink,
+h4 .headerlink {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    opacity: 0 !important;
+    /* Hides the icon so only the text looks clickable */
+    z-index: 1;
+}
