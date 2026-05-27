@@ -264,7 +264,17 @@ class MomentWorker(QThread):
             is_all_nan = np.isnan(mc).all()
 
             with np.errstate(invalid='ignore', divide='ignore'):
-                if 'Moment 0' in mtype:
+                if 'Moment -1' in mtype:
+                    if is_all_nan:
+                        data = np.full(m0_raw.shape, np.nan)
+                    else:
+                        with warnings.catch_warnings():
+                            warnings.simplefilter("ignore")
+                            data = np.nanmean(mc, axis=0)
+                    levels   = (0, float(np.nanmax(data)) if not np.isnan(data).all() else 1.0)
+                    unit_str = display_unit
+
+                elif 'Moment 0' in mtype:
                     if is_all_nan:
                         data = np.full(m0_raw.shape, np.nan)
                     else:
@@ -1261,11 +1271,11 @@ class ExplorerTab(QWidget):
         self.bottom_half.setSpacing(6)
         self.panels = []
 
-        moment_options = ["Moment 0 (Integrated Intensity)", "Moment 1 (Velocity Field)",
-                          "Moment 2 (Velocity Dispersion)", "Moment 8 (Peak Intensity)",
-                          "Moment 9 (Peak Velocity)", "PV Diagram"]
+        moment_options = ["Moment -1 (Mean Intensity)", "Moment 0 (Integrated Intensity)",
+                          "Moment 1 (Velocity Field)", "Moment 2 (Velocity Dispersion)",
+                          "Moment 8 (Peak Intensity)", "Moment 9 (Peak Velocity)", "PV Diagram"]
 
-        for i, default_option in enumerate([moment_options[0], moment_options[3], moment_options[1]]):
+        for i, default_option in enumerate([moment_options[1], moment_options[4], moment_options[2]]):
             panel = {}
             panel_frame = QFrame()
             panel_frame.setObjectName("PanelFrame")
@@ -5489,7 +5499,9 @@ class ExplorerTab(QWidget):
 
                 # Histogram axis label
                 view = p['view']
-                if 'Moment 0' in mtype:
+                if 'Moment -1' in mtype:
+                    view.ui.histogram.axis.setLabel(f"Mean Flux ({unit_str})")
+                elif 'Moment 0' in mtype:
                     view.ui.histogram.axis.setLabel(f"Flux ({unit_str})")
                 elif 'Moment 1' in mtype:
                     view.ui.histogram.axis.setLabel('Velocity (km/s)')
