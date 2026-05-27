@@ -79,6 +79,7 @@ class KinematicExplorerApp(QMainWindow):
         self.is_absolute_wcs = False 
 
         self.tabs = QTabWidget()
+        self.tabs.setElideMode(Qt.ElideRight)
         self.tabs.setTabsClosable(True)
         self.tabs.tabCloseRequested.connect(self.close_tab)
         self.tabs.currentChanged.connect(self.update_menu_states)

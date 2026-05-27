@@ -627,41 +627,61 @@ class SpectrumViewBox(pg.ViewBox):
         self.drag_start = None
         self.current_roi = None
         self.parent_tab = None
+        self.dragging_roi = None
+        self.dragging_roi_initial_x = None
 
     def mouseDragEvent(self, ev, axis=None):
-        if (ev.modifiers() == Qt.ControlModifier and ev.isStart()) or self.current_roi is not None:
+        if (ev.modifiers() == Qt.ControlModifier and ev.isStart()) or self.current_roi is not None or getattr(self, 'dragging_roi', None) is not None:
             if ev.isStart():
-                self.drag_start = self.mapSceneToView(ev.buttonDownScenePos())
-                self.current_roi = pg.ROI([self.drag_start.x(), self.drag_start.y()], [0, 0], pen=pg.mkPen('c', width=2))
-                self.current_roi.addScaleHandle([0, 0], [1, 1])
-                self.current_roi.addScaleHandle([1, 1], [0, 0])
-                self.current_roi.addScaleHandle([0, 1], [1, 0])
-                self.current_roi.addScaleHandle([1, 0], [0, 1])
-                self.current_roi.addScaleHandle([0.5, 0], [0.5, 1])
-                self.current_roi.addScaleHandle([0.5, 1], [0.5, 0])
-                self.current_roi.addScaleHandle([0, 0.5], [1, 0.5])
-                self.current_roi.addScaleHandle([1, 0.5], [0, 0.5])
-                self.addItem(self.current_roi)
+                mp = self.mapSceneToView(ev.buttonDownScenePos())
+                self.drag_start = mp
+                
+                clicked_roi = None
+                if self.parent_tab:
+                    active_rois = self.parent_tab.get_active_spectrum_rois()
+                    for item in active_rois:
+                        roi = item["roi"]
+                        if hasattr(roi, 'getData'):
+                            x_data, _ = roi.getData()
+                            if x_data is not None and len(x_data) >= 2:
+                                min_x, max_x = min(x_data), max(x_data)
+                                if min_x <= mp.x() <= max_x:
+                                    clicked_roi = roi
+                                    break
+                
+                if clicked_roi:
+                    self.dragging_roi = clicked_roi
+                    x_data, _ = clicked_roi.getData()
+                    self.dragging_roi_initial_x = list(x_data)
+                else:
+                    self.current_roi = pg.PlotDataItem(pen=pg.mkPen(color='c', width=4))
+                    self.addItem(self.current_roi)
                 ev.accept()
             elif ev.isFinish():
-                if self.parent_tab and self.current_roi:
-                    pos = self.current_roi.pos()
-                    size = self.current_roi.size()
-                    nx = pos.x() + min(0, size.x())
-                    ny = pos.y() + min(0, size.y())
-                    nw = abs(size.x())
-                    nh = abs(size.y())
-                    self.current_roi.setPos([nx, ny])
-                    self.current_roi.setSize([nw, nh])
+                if getattr(self, 'dragging_roi', None) is not None:
+                    if self.parent_tab:
+                        self.parent_tab.update_spectrum_region_calc()
+                        for item in self.parent_tab.get_active_spectrum_rois():
+                            if item["roi"] == self.dragging_roi and "update_text_pos" in item:
+                                item["update_text_pos"]()
+                    self.dragging_roi = None
+                elif self.parent_tab and self.current_roi:
                     self.parent_tab.add_spectrum_region(self.current_roi)
-                self.current_roi = None
+                    self.current_roi = None
                 ev.accept()
             else:
-                if self.current_roi:
-                    current_pos = self.mapSceneToView(ev.scenePos())
-                    w = current_pos.x() - self.drag_start.x()
-                    h = current_pos.y() - self.drag_start.y()
-                    self.current_roi.setSize([w, h])
+                current_pos = self.mapSceneToView(ev.scenePos())
+                dx = current_pos.x() - self.drag_start.x()
+                
+                if getattr(self, 'dragging_roi', None) is not None:
+                    new_x_data = [x + dx for x in self.dragging_roi_initial_x]
+                    self.dragging_roi.setData(new_x_data, [0, 0])
+                    if self.parent_tab:
+                        for item in self.parent_tab.get_active_spectrum_rois():
+                            if item["roi"] == self.dragging_roi and "update_text_pos" in item:
+                                item["update_text_pos"]()
+                elif self.current_roi:
+                    self.current_roi.setData([self.drag_start.x(), current_pos.x()], [0, 0])
                 ev.accept()
         else:
             super().mouseDragEvent(ev, axis)
@@ -1122,19 +1142,45 @@ class ExplorerTab(QWidget):
         self.combo_spec_unit.currentTextChanged.connect(self.update_spectrum)
         input_layout.addWidget(self.combo_spec_unit)
         
-        self.btn_smooth = QPushButton("Smooth")
+        #self.btn_smooth = QPushButton("Smooth")
+        self.btn_smooth = QPushButton()
+        smooth_icon = qta.icon('fa5s.bezier-curve')
+        self.btn_smooth.setIcon(smooth_icon)
+        self.btn_smooth.setToolTip("Spectral smoothing")
+        self.btn_smooth.setFixedWidth(36)
+        self.btn_smooth.setFixedHeight(26)
+        self.btn_smooth.setStyleSheet("font-size: 10px; padding: 2px;")
         self.btn_smooth.clicked.connect(self.open_smoothing_dialog)
         input_layout.addWidget(self.btn_smooth)
         input_layout.addStretch()
-        input_layout.addWidget(QLabel("Min Vel:"))
+        input_layout.addWidget(QLabel("Min:"))
         self.input_vmin = QLineEdit("0.00")
-        self.input_vmin.setMinimumWidth(80)
+        self.input_vmin.setMinimumWidth(65)
+        self.input_vmin.setMaximumWidth(80)
         input_layout.addWidget(self.input_vmin)
         
-        input_layout.addWidget(QLabel("Max Vel:"))
+        input_layout.addWidget(QLabel("Max:"))
         self.input_vmax = QLineEdit("1.00")
-        self.input_vmax.setMinimumWidth(80)
+        self.input_vmax.setMinimumWidth(65)
+        self.input_vmax.setMaximumWidth(80)
         input_layout.addWidget(self.input_vmax)
+        
+        # --- NEW UI CODE START ---
+        input_layout.addWidget(QLabel("Ref. Freq. (GHz):"))
+        self.input_ref_freq = QLineEdit("")
+        self.input_ref_freq.setMinimumWidth(115)
+        self.input_ref_freq.returnPressed.connect(self.update_spectral_axis)
+        self.input_ref_freq.editingFinished.connect(self.update_spectral_axis)
+        input_layout.addWidget(self.input_ref_freq)
+        
+        self.combo_axis_type = QComboBox()
+        self.combo_axis_type.addItems(["Radio Velocity", "Optical Velocity", "Frequency", "Wavelength", "Channel"])
+        self.combo_axis_type.setCurrentText("Radio Velocity")
+        self.combo_axis_type.setMaximumWidth(120)
+        self.combo_axis_type.setStyleSheet("font-size: 11px;")
+        self.combo_axis_type.currentIndexChanged.connect(self.update_spectral_axis)
+        input_layout.addWidget(self.combo_axis_type)
+        # --- NEW UI CODE END ---
         
         # Hidden backing widgets (used by update_spectrum_region_calc)
         self.combo_regions = QComboBox(); self.combo_regions.addItem("None")
@@ -1149,8 +1195,13 @@ class ExplorerTab(QWidget):
         self.lbl_calc = QLabel("")
 
         # Spectral Statistics popup button
-        self.btn_spectral_stats = QPushButton("Spectral Statistics")
+        #self.btn_spectral_stats = QPushButton("Statistics")
+        self.btn_spectral_stats = QPushButton()
+        stats_icon = qta.icon('fa5s.chart-area')
+        self.btn_spectral_stats.setIcon(stats_icon)
         self.btn_spectral_stats.setToolTip("Open spectral statistics panel for drawn velocity boxes")
+        self.btn_spectral_stats.setFixedWidth(36)
+        self.btn_spectral_stats.setFixedHeight(26)
         self.btn_spectral_stats.clicked.connect(self.open_spectral_stats_popup)
         self.btn_spectral_stats.hide()
         input_layout.addWidget(self.btn_spectral_stats)
@@ -2776,13 +2827,20 @@ class ExplorerTab(QWidget):
                     self.slider_channel.setValue(idx)
                 elif event.modifiers() == Qt.ControlModifier:
                     hit = False
-                    if hasattr(self, 'spectrum_rois') and self.spectrum_rois:
-                        for item in self.spectrum_rois:
+                    active_rois = self.get_active_spectrum_rois()
+                    if active_rois:
+                        for item in active_rois:
                             roi = item["roi"]
-                            r_pos = roi.pos()
-                            r_size = roi.size()
-                            min_x = min(r_pos.x(), r_pos.x() + r_size.x())
-                            max_x = max(r_pos.x(), r_pos.x() + r_size.x())
+                            if hasattr(roi, 'getData'):
+                                x_data, _ = roi.getData()
+                                if x_data is None or len(x_data) < 2:
+                                    continue
+                                min_x, max_x = min(x_data), max(x_data)
+                            else:
+                                r_pos = roi.pos()
+                                r_size = roi.size()
+                                min_x = min(r_pos.x(), r_pos.x() + r_size.x())
+                                max_x = max(r_pos.x(), r_pos.x() + r_size.x())
                             if min_x <= mp.x() <= max_x:
                                 self.select_region_for_deletion(roi)
                                 hit = True
@@ -2914,7 +2972,35 @@ class ExplorerTab(QWidget):
             self.current_file_name = file_name
             self.is_2d_image = False
             try:
-                sc = SpectralCube.read(file_name).with_spectral_unit(u.km / u.s, velocity_convention='radio')
+                # Step 1: Read the cube without immediate conversion
+                sc = SpectralCube.read(file_name)
+                
+                # Step 2: Implement Central Frequency Fallback
+                self.rest_freq_hz = sc.header.get('RESTFRQ', sc.header.get('RESTFREQ', None))
+                
+                if self.rest_freq_hz is None:
+                    raw_axis = sc.spectral_axis
+                    central_idx = len(raw_axis) // 2
+                    try:
+                        # Convert to Hz safely if axis is frequency
+                        self.rest_freq_hz = raw_axis[central_idx].to(u.Hz).value
+                    except Exception:
+                        # Blind fallback if axis cannot be explicitly converted
+                        self.rest_freq_hz = raw_axis[central_idx].value
+                    
+                    # Inject into the header to prevent downstream crashes
+                    if hasattr(sc, '_header'):
+                        sc._header['RESTFRQ'] = self.rest_freq_hz
+                        
+                # Sync UI Text Box
+                if hasattr(self, 'input_ref_freq') and self.rest_freq_hz is not None:
+                    self.input_ref_freq.blockSignals(True)
+                    self.input_ref_freq.setText(f"{self.rest_freq_hz / 1e9:.6f}")
+                    self.input_ref_freq.setCursorPosition(0)
+                    self.input_ref_freq.blockSignals(False)
+                        
+                # Step 3: Now safely convert using the rest_value argument
+                sc = sc.with_spectral_unit(u.km / u.s, velocity_convention='radio', rest_value=self.rest_freq_hz * u.Hz)
             except Exception as e:
                 with fits.open(file_name) as hdul:
                     data = np.squeeze(hdul[0].data)
@@ -3380,7 +3466,9 @@ class ExplorerTab(QWidget):
 
         self.input_channel_vel.setText("")
         self.input_vmin.setText("0.00")
+        self.input_vmin.setCursorPosition(0)
         self.input_vmax.setText("1.00")
+        self.input_vmax.setCursorPosition(0)
         self.combo_spec_stat.blockSignals(True)
         self.combo_spec_stat.setCurrentText("Mean")
         self.combo_spec_stat.blockSignals(False)
@@ -4488,6 +4576,145 @@ class ExplorerTab(QWidget):
             if self.combo_spec_unit.currentText() == "Jy":
                 self.combo_spec_unit.setCurrentIndex(0) # Auto-switch to Native
 
+    def update_spectral_axis(self):
+        """Dynamically recalculates the spectrum X-axis based on dropdown selections and custom rest frequencies."""
+        if getattr(self, 'freq_array', None) is None:
+            return
+            
+        # 1. Parse custom rest frequency if provided
+        ref_freq_str = self.input_ref_freq.text().strip()
+        if ref_freq_str:
+            try:
+                self.rest_freq_hz = float(ref_freq_str) * 1e9
+            except ValueError:
+                pass
+                
+        if getattr(self, 'rest_freq_hz', None) is None:
+            return
+            
+        axis_type = self.combo_axis_type.currentText()
+        
+        # 2. Capture old state for synchronization
+        old_v_axis = getattr(self, 'v_axis', None)
+        old_view_range = None
+        old_vline_pos = None
+        old_region_bounds = None
+        old_stats_roi_bounds = {}
+        
+        if old_v_axis is not None:
+            try:
+                old_view_range = self.plot_widget.viewRange()[0]
+                if hasattr(self, 'v_line'): old_vline_pos = self.v_line.value()
+                if hasattr(self, 'region'): old_region_bounds = self.region.getRegion()
+                for r in self.get_active_spectrum_rois():
+                    roi = r["roi"]
+                    if hasattr(roi, 'getRegion'):
+                        old_stats_roi_bounds[r["name"]] = roi.getRegion()
+                    elif hasattr(roi, 'getData'):
+                        x_data, _ = roi.getData()
+                        if x_data is not None and len(x_data) >= 2:
+                            old_stats_roi_bounds[r["name"]] = (min(x_data), max(x_data))
+                    else:
+                        pos = roi.pos()
+                        size = roi.size()
+                        old_stats_roi_bounds[r["name"]] = (pos.x(), pos.x() + size.x(), pos.y(), size.y())
+            except Exception:
+                pass
+
+        # 3. Use astropy units for robust conversion
+        freq_q = self.freq_array * u.Hz
+        rest_q = self.rest_freq_hz * u.Hz
+        
+        try:
+            # 4. Generate New X-Axis based on type
+            if axis_type == "Radio Velocity":
+                vel_q = freq_q.to(u.km / u.s, equivalencies=u.doppler_radio(rest_q))
+                self.v_axis = vel_q.value
+                self.plot_widget.setLabel('bottom', 'Radio Velocity (km/s)')
+                
+            elif axis_type == "Optical Velocity":
+                vel_q = freq_q.to(u.km / u.s, equivalencies=u.doppler_optical(rest_q))
+                self.v_axis = vel_q.value
+                self.plot_widget.setLabel('bottom', 'Optical Velocity (km/s)')
+                
+            elif axis_type == "Frequency":
+                if np.nanmax(freq_q.value) > 1e9:
+                    self.v_axis = freq_q.to(u.GHz).value
+                    self.plot_widget.setLabel('bottom', 'Frequency (GHz)')
+                elif np.nanmax(freq_q.value) > 1e6:
+                    self.v_axis = freq_q.to(u.MHz).value
+                    self.plot_widget.setLabel('bottom', 'Frequency (MHz)')
+                else:
+                    self.v_axis = freq_q.value
+                    self.plot_widget.setLabel('bottom', 'Frequency (Hz)')
+                    
+            elif axis_type == "Wavelength":
+                wave_q = freq_q.to(u.m, equivalencies=u.spectral())
+                if np.nanmean(wave_q.value) < 1e-3:
+                    self.v_axis = wave_q.to(u.um).value
+                    self.plot_widget.setLabel('bottom', 'Wavelength (μm)')
+                else:
+                    self.v_axis = wave_q.to(u.mm).value
+                    self.plot_widget.setLabel('bottom', 'Wavelength (mm)')
+                    
+            elif axis_type == "Channel":
+                self.v_axis = np.arange(len(self.freq_array))
+                self.plot_widget.setLabel('bottom', 'Channel')
+                
+            # Sync the smoothing tab's label if it exists
+            if hasattr(self, 'plot_widget_smooth'):
+                self.plot_widget_smooth.setLabel('bottom', self.plot_widget.getAxis('bottom').labelText)
+                
+            # 5. Synchronize UI markers and view limits to the new axis
+            if old_v_axis is not None and len(old_v_axis) > 1 and len(old_v_axis) == len(self.v_axis):
+                sort_idx = np.argsort(old_v_axis)
+                old_v_sorted = old_v_axis[sort_idx]
+                new_v_sorted = self.v_axis[sort_idx]
+                
+                def map_val(val):
+                    channel_interp = np.interp(val, old_v_sorted, np.arange(len(old_v_sorted)))
+                    return float(np.interp(channel_interp, np.arange(len(new_v_sorted)), new_v_sorted))
+                    
+                if old_view_range is not None:
+                    nv_min, nv_max = map_val(old_view_range[0]), map_val(old_view_range[1])
+                    self.plot_widget.setXRange(min(nv_min, nv_max), max(nv_min, nv_max), padding=0)
+                    if hasattr(self, 'plot_widget_smooth'):
+                        self.plot_widget_smooth.setXRange(min(nv_min, nv_max), max(nv_min, nv_max), padding=0)
+                    
+                if hasattr(self, 'v_line') and old_vline_pos is not None:
+                    self.v_line.setValue(map_val(old_vline_pos))
+                    
+                if hasattr(self, 'region') and old_region_bounds is not None:
+                    nr_min, nr_max = map_val(old_region_bounds[0]), map_val(old_region_bounds[1])
+                    self.region.setRegion([min(nr_min, nr_max), max(nr_min, nr_max)])
+                    
+                for r in self.get_active_spectrum_rois():
+                    if r["name"] in old_stats_roi_bounds:
+                        b = old_stats_roi_bounds[r["name"]]
+                        nr_min, nr_max = map_val(b[0]), map_val(b[1])
+                        roi = r["roi"]
+                        if hasattr(roi, 'setRegion'):
+                            roi.setRegion([min(nr_min, nr_max), max(nr_min, nr_max)])
+                        elif hasattr(roi, 'setData'):
+                            roi.setData([min(nr_min, nr_max), max(nr_min, nr_max)], [0, 0])
+                            if "update_text_pos" in r:
+                                r["update_text_pos"]()
+                        else:
+                            roi.blockSignals(True)
+                            new_x = min(nr_min, nr_max)
+                            new_w = abs(nr_max - nr_min)
+                            roi.setPos([new_x, b[2]])
+                            roi.setSize([new_w, b[3]])
+                            roi.blockSignals(False)
+                            if "update_text_pos" in r:
+                                r["update_text_pos"]()
+                    
+            # 6. Redraw spectrum with the new axis array
+            self.update_spectrum()
+            
+        except Exception as e:
+            print(f"Error updating spectral axis: {e}")
+
     def update_spectrum(self):
         if self.cube_clean is None or getattr(self, 'is_2d_image', False): return
         stat = self.combo_spec_stat.currentText()
@@ -4547,7 +4774,7 @@ class ExplorerTab(QWidget):
                 # Phase 2: Spatial Collapse
                 if "Max" in stat:
                     raw_array = np.nanmax(sub_data, axis=(1, 2))
-                elif "Sum" in stat:
+                elif "Sum" in stat or "Flux Density" in stat:
                     raw_array = np.nansum(sub_data, axis=(1, 2))
                 elif "Median" in stat:
                     raw_array = np.nanmedian(sub_data, axis=(1, 2))
@@ -4690,7 +4917,7 @@ class ExplorerTab(QWidget):
 
                 if "Max" in stat:
                     ov_spec = np.nanmax(ov_sub_data, axis=(1, 2))
-                elif "Sum" in stat:
+                elif "Sum" in stat or "Flux Density" in stat:
                     ov_spec = np.nansum(ov_sub_data, axis=(1, 2))
                 else:
                     ov_spec = np.nanmean(ov_sub_data, axis=(1, 2))
@@ -4812,6 +5039,10 @@ class ExplorerTab(QWidget):
             for item in self.catalog_overlay_items:
                 if isinstance(item, pg.TextItem):
                     item.setPos(item.pos().x(), ymax)
+                    
+        # Update popup if open
+        if getattr(self, '_spectral_stats_popup', None) is not None and self._spectral_stats_popup.isVisible():
+            self._run_spectral_stats_calc(self._spectral_stats_popup)
 
     def _cleanup_removed_overlay_curves(self):
         active_names = set()
@@ -4850,7 +5081,21 @@ class ExplorerTab(QWidget):
     def update_text_from_region(self):
         if self.cube_clean is None: return
         minX, maxX = self.region.getRegion()
-        self.input_vmin.setText(f"{minX:.2f}"); self.input_vmax.setText(f"{maxX:.2f}")
+        
+        axis_str = self.combo_axis_type.currentText() if hasattr(self, 'combo_axis_type') else ""
+        
+        if axis_str == "Channel":
+            self.input_vmin.setText(f"{int(round(minX))}")
+            self.input_vmax.setText(f"{int(round(maxX))}")
+        elif axis_str in ["Frequency", "Wavelength"]:
+            self.input_vmin.setText(f"{minX:.6f}")
+            self.input_vmax.setText(f"{maxX:.6f}")
+        else:
+            self.input_vmin.setText(f"{minX:.2f}")
+            self.input_vmax.setText(f"{maxX:.2f}")
+            
+        self.input_vmin.setCursorPosition(0)
+        self.input_vmax.setCursorPosition(0)
 
     def update_region_from_text(self):
         if self.cube_clean is None: return
@@ -5510,21 +5755,26 @@ class ExplorerTab(QWidget):
         
         def update_text_pos(r=roi, t=text_item):
             try:
-                pos = r.pos()
-                size = r.size()
-                max_x = max(pos.x(), pos.x() + size.x())
-                max_y = max(pos.y(), pos.y() + size.y())
-                t.setPos(max_x, max_y)
+                if hasattr(r, 'getData'):
+                    x_data, _ = r.getData()
+                    if x_data is not None and len(x_data) > 0:
+                        t.setPos(max(x_data), 0)
+                else:
+                    pos = r.pos()
+                    size = r.size()
+                    max_x = max(pos.x(), pos.x() + size.x())
+                    max_y = max(pos.y(), pos.y() + size.y())
+                    t.setPos(max_x, max_y)
             except Exception:
                 pass
             
-        roi.sigRegionChanged.connect(update_text_pos)
+        if hasattr(roi, 'sigRegionChanged'):
+            roi.sigRegionChanged.connect(update_text_pos)
+            roi.sigRegionChanged.connect(self.update_spectrum_region_calc)
         update_text_pos()
         
         roi_info["text_item"] = text_item
         roi_info["update_text_pos"] = update_text_pos
-        
-        roi.sigRegionChanged.connect(self.update_spectrum_region_calc)
         
         self.rename_regions()
         self.combo_regions.blockSignals(True)
@@ -5737,7 +5987,7 @@ class ExplorerTab(QWidget):
                     self.cube_clean, self.view_channel.getImageItem(), axes=(1, 2))
             if "Max" in stat:
                 spec = np.nanmax(sub_data, axis=(1, 2))
-            elif "Sum" in stat:
+            elif "Sum" in stat or "Flux Density" in stat:
                 spec = np.nansum(sub_data, axis=(1, 2))
                 if self.pixels_per_beam > 1.0:
                     spec /= self.pixels_per_beam
@@ -5768,19 +6018,55 @@ class ExplorerTab(QWidget):
         results_html = []
 
 
+        # Determine which plot widget is active to grab the correct curves
+        is_smooth_active = False
+        if getattr(self, 'spectrum_tabs', None) is not None and getattr(self, 'plot_widget_smooth', None) is not None:
+            if self.spectrum_tabs.currentWidget() == self.plot_widget_smooth:
+                is_smooth_active = True
+
         for ap in apertures_to_calc:
             name = ap["name"]
-            # Extract spectrum independently from cube – ignores what the panel shows
-            v_axis, flux = self._extract_spectrum_for_stats(ap["roi"])
-            if v_axis is None or flux is None:
-                results_html.append(f"<b>{name}:</b> Could not extract data")
+            
+            # Extract spectrum directly from the active plot's pre-converted data
+            curve = None
+            if name == "Whole Map":
+                curve = self.spectrum_curve_smooth if is_smooth_active else getattr(self, 'spectrum_curve', None)
+            else:
+                curves_dict = self.spectrum_curves_smooth if is_smooth_active else getattr(self, 'spectrum_curves', {})
+                curve = curves_dict.get(name)
+                
+            if curve is None:
+                results_html.append(f"<b>{name}:</b> Could not locate plot data")
                 continue
+                
+            x_edges, flux = curve.getData()
+            if x_edges is None or flux is None or len(flux) == 0:
+                results_html.append(f"<b>{name}:</b> Plot data is empty")
+                continue
+                
+            # Recover the centers from the stepMode edges (which exactly matches the UI's sorted v_axis)
+            v_axis = (x_edges[:-1] + x_edges[1:]) / 2.0
 
-            # Build mask from selected 1D velocity boxes
+            # Hardcode physics to Radio Velocity for dx and peak location calculations
+            try:
+                sort_idx = np.argsort(self.v_axis)
+                freq_q = self.freq_array[sort_idx] * u.Hz
+                rest_q = self.rest_freq_hz * u.Hz
+                radio_v_axis = freq_q.to(u.km / u.s, equivalencies=u.doppler_radio(rest_q)).value
+            except Exception:
+                radio_v_axis = v_axis
+
+            # Build mask from selected 1D velocity boxes (using displayed axis for UI mapping)
             combined_mask = np.zeros_like(v_axis, dtype=bool)
             for roi in selected_rois_1d:
-                pos = roi.pos(); size = roi.size()
-                min_v, max_v = pos.x(), pos.x() + size.x()
+                if hasattr(roi, 'getData'):
+                    x_data, _ = roi.getData()
+                    if x_data is None or len(x_data) < 2:
+                        continue
+                    min_v, max_v = min(x_data), max(x_data)
+                else:
+                    pos = roi.pos(); size = roi.size()
+                    min_v, max_v = pos.x(), pos.x() + size.x()
                 if min_v > max_v: min_v, max_v = max_v, min_v
                 combined_mask |= (v_axis >= min_v) & (v_axis <= max_v)
 
@@ -5790,8 +6076,8 @@ class ExplorerTab(QWidget):
                 continue
 
             stats_lines = [f"<b style='color:#89b4fa'>{name}</b>"]
-            dv = abs(v_axis[1] - v_axis[0]) if len(v_axis) > 1 else 1.0
-            valid_v = v_axis[combined_mask]
+            valid_v = radio_v_axis[combined_mask]
+            dv = abs(valid_v[1] - valid_v[0]) if len(valid_v) > 1 else 1.0
 
             for calc in calc_types:
                 calc = calc.strip()
@@ -5845,7 +6131,7 @@ class ExplorerTab(QWidget):
 
                 if "Max" in self.combo_spec_stat.currentText():
                     ov_spec = np.nanmax(ov_sub_data, axis=(1, 2))
-                elif "Sum" in self.combo_spec_stat.currentText():
+                elif "Sum" in self.combo_spec_stat.currentText() or "Flux Density" in self.combo_spec_stat.currentText():
                     ov_spec = np.nansum(ov_sub_data, axis=(1, 2))
                 else:
                     ov_spec = np.nanmean(ov_sub_data, axis=(1, 2))
