@@ -1109,6 +1109,22 @@ class ExplorerTab(QWidget):
         self.spectrum_curve_smooth = pg.PlotDataItem([], [], stepMode="center", pen=pg.mkPen('c', width=2))
         self.plot_widget_smooth.addItem(self.spectrum_curve_smooth)
         
+        self.smooth_active_line = pg.InfiniteLine(angle=90, movable=False, pen=pg.mkPen('g', width=2, style=Qt.DashLine))
+        self.smooth_active_line.hide()
+        self.plot_widget_smooth.addItem(self.smooth_active_line)
+        
+        self.smooth_velocity_region = pg.LinearRegionItem([0, 1], brush=pg.mkBrush(52, 152, 219, 40))
+        self.smooth_velocity_region.setZValue(10)
+        self.smooth_velocity_region.hide()
+        for line in self.smooth_velocity_region.lines:
+            line.setPen(pg.mkPen(color='#3498db', width=3))
+            line.setHoverPen(pg.mkPen(color='#f1c40f', width=5))
+        self.plot_widget_smooth.addItem(self.smooth_velocity_region)
+        
+        self.v_line.sigPositionChanged.connect(lambda *args: self.smooth_active_line.setValue(self.v_line.value()))
+        self.region.sigRegionChanged.connect(self._sync_smooth_region_from_main)
+        self.smooth_velocity_region.sigRegionChanged.connect(self._sync_main_region_from_smooth)
+
         self.smoothing_params = None
         self.spectrum_tabs.currentChanged.connect(self._on_spectrum_tab_changed)
         
@@ -1218,6 +1234,11 @@ class ExplorerTab(QWidget):
         self.region.sigRegionChanged.connect(self.update_text_from_region)
         self.region.sigRegionChanged.connect(self._on_region_drag_start)
         self.region.sigRegionChangeFinished.connect(self._on_region_drag_end)
+        
+        self.smooth_velocity_region.sigRegionChanged.connect(self.update_text_from_region)
+        self.smooth_velocity_region.sigRegionChanged.connect(self._on_region_drag_start)
+        self.smooth_velocity_region.sigRegionChangeFinished.connect(self._on_region_drag_end)
+        
         self._region_dragging = False
 
         top_half.addWidget(self.frame_spectrum, stretch=7)
@@ -3190,6 +3211,8 @@ class ExplorerTab(QWidget):
             self.slider_channel.setValue(brightest_ch)
             self.update_channel_map()
             self.v_line.show()
+            if hasattr(self, 'smooth_active_line'):
+                self.smooth_active_line.show()
 
             v_min, v_max = np.nanmin(self.v_axis), np.nanmax(self.v_axis)
             peak_vel = self.v_axis[brightest_ch]
@@ -3201,6 +3224,8 @@ class ExplorerTab(QWidget):
                 r_hi = v_min + 0.6 * (v_max - v_min)
             self.region.setRegion([r_lo, r_hi])
             self.region.show()
+            if hasattr(self, 'smooth_velocity_region'):
+                self.smooth_velocity_region.show()
             self.combo_roi.blockSignals(True)
             self.combo_roi.setCurrentText("Whole Map")
             self.combo_roi.blockSignals(False)
@@ -3491,6 +3516,10 @@ class ExplorerTab(QWidget):
 
         self.v_line.hide()
         self.region.hide()
+        if hasattr(self, 'smooth_active_line'):
+            self.smooth_active_line.hide()
+        if hasattr(self, 'smooth_velocity_region'):
+            self.smooth_velocity_region.hide()
 
         for p in self.panels:
             p['combo_pv_cut'].blockSignals(True)
@@ -4682,11 +4711,17 @@ class ExplorerTab(QWidget):
                         self.plot_widget_smooth.setXRange(min(nv_min, nv_max), max(nv_min, nv_max), padding=0)
                     
                 if hasattr(self, 'v_line') and old_vline_pos is not None:
-                    self.v_line.setValue(map_val(old_vline_pos))
+                    new_pos = map_val(old_vline_pos)
+                    self.v_line.setValue(new_pos)
+                    if hasattr(self, 'smooth_active_line'):
+                        self.smooth_active_line.setValue(new_pos)
                     
                 if hasattr(self, 'region') and old_region_bounds is not None:
                     nr_min, nr_max = map_val(old_region_bounds[0]), map_val(old_region_bounds[1])
-                    self.region.setRegion([min(nr_min, nr_max), max(nr_min, nr_max)])
+                    new_region = [min(nr_min, nr_max), max(nr_min, nr_max)]
+                    self.region.setRegion(new_region)
+                    if hasattr(self, 'smooth_velocity_region'):
+                        self.smooth_velocity_region.setRegion(new_region)
                     
                 for r in self.get_active_spectrum_rois():
                     if r["name"] in old_stats_roi_bounds:
@@ -5120,6 +5155,18 @@ class ExplorerTab(QWidget):
             for t in sorted_ticks:
                 if t not in keep:
                     t.hide()
+
+    def _sync_smooth_region_from_main(self):
+        if not hasattr(self, 'smooth_velocity_region'): return
+        self.smooth_velocity_region.blockSignals(True)
+        self.smooth_velocity_region.setRegion(self.region.getRegion())
+        self.smooth_velocity_region.blockSignals(False)
+
+    def _sync_main_region_from_smooth(self):
+        if not hasattr(self, 'region'): return
+        self.region.blockSignals(True)
+        self.region.setRegion(self.smooth_velocity_region.getRegion())
+        self.region.blockSignals(False)
 
     def _on_region_drag_start(self):
         """Called on every sigRegionChanged — marks that a drag is in progress."""
