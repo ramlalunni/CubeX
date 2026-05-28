@@ -1,19 +1,39 @@
 CubeX/
-├── main.py                 # The single entry point to run the app
-├── src/                    # All source code lives here
+├── install.sh                      # Setup script
+├── main.py                         # The single entry point to run the app
+├── requirements.txt                # List of pip dependencies
+├── src/                            # All source code lives here
 │   ├── __init__.py
-│   ├── core/               # Backend logic (No GUI code here)
+│   ├── core/                       # Backend logic (Data parsing & heavy math)
 │   │   ├── __init__.py
-│   │   └── splatalogue.py  # format_chemical_formula() and SplatalogueWorker
-│   └── gui/                # Frontend user interface
-│       ├── __init__.py
-│       ├── main_window.py  # KinematicExplorerApp class
-│       ├── explorer_tab.py # ExplorerTab class
-│       ├── dialogs.py      # LineCatalogDialog, LineSelectionDialog, ContourDialog
-│       └── custom.py       # JumpSlider, WCSAxisItem
-├── assets/                 # Static files
-│   └── style.qss           # Put your dark_stylesheet string in this text file
-├── requirements.txt        # List of pip dependencies
-├── README.md               # Instructions on what the app is and how to use it
-├── LICENSE                 # Choose a license (e.g., MIT or GPL-3.0)
-└── .gitignore              # Files git should ignore (e.g., __pycache__, .fits files)
+│   │   ├── exporters.py
+│   │   ├── math_kernels.py
+│   │   └── splatalogue.py
+│   ├── gui/                        # Frontend user interface (MVC layout)
+│   │   ├── __init__.py
+│   │   ├── components/             # Pure visual layouts (Views)
+│   │   │   ├── channel_grid_view.py
+│   │   │   ├── custom_widgets.py
+│   │   │   ├── explorer_view.py
+│   │   │   ├── graph_panels.py
+│   │   │   └── main_window_view.py
+│   │   ├── controllers/            # The orchestrators (Controllers)
+│   │   │   ├── channel_grid_controller.py
+│   │   │   ├── explorer_controller.py
+│   │   │   ├── main_controller.py
+│   │   │   └── workers.py
+│   │   └── dialogs/                # Modular stateless popup forms
+│   │       ├── __init__.py
+│   │       ├── contour_dialog.py
+│   │       ├── contour_options_dialog.py
+│   │       ├── line_catalog_dialog.py
+│   │       ├── line_selection_dialog.py
+│   │       ├── region_properties_dialog.py
+│   │       └── spectral_smoothing_dialog.py
+│   └── utils/                      # Utility helpers
+│       └── wcs_helpers.py
+├── assets/                         # Static files
+│   └── style.qss                   # Put your dark_stylesheet string in this text file
+├── README.md                       # Instructions on what the app is and how to use it
+├── LICENSE                         # Choose a license (e.g., MIT or GPL-3.0)
+└── .gitignore                      # Files git should ignore (e.g., __pycache__, .fits files)

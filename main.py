@@ -4,7 +4,7 @@ from PyQt5.QtWidgets import QApplication
 from PyQt5.QtCore import Qt
 import pyqtgraph as pg
 
-from src.gui.main_window import KinematicExplorerApp
+from src.gui.components.main_window_view import KinematicExplorerApp
 
 def get_resource_path(relative_path):
     """

@@ -1,0 +1,118 @@
+from PyQt5.QtCore import Qt, pyqtSignal
+from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel, 
+                             QPushButton, QLineEdit, QComboBox, QDoubleSpinBox, 
+                             QRadioButton, QSpinBox, QTableWidget, QTableWidgetItem, 
+                             QHeaderView, QMessageBox, QStackedWidget, QWidget,
+                             QScrollArea, QGridLayout, QFileDialog, QGroupBox, QCheckBox,
+                             QTabWidget)
+import numpy as np
+import pyqtgraph as pg
+import matplotlib.pyplot as plt
+
+class SpectralSmoothingDialog(QDialog):
+    """
+    Dialog to select spectral smoothing method and parameters.
+    """
+    apply_clicked = pyqtSignal(dict)
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Spectral Smoothing")
+        self.setMinimumWidth(350)
+        self.initUI()
+        
+    def initUI(self):
+        layout = QVBoxLayout(self)
+        
+        method_layout = QHBoxLayout()
+        method_layout.addWidget(QLabel("Method:"))
+        self.combo_method = QComboBox()
+        self.combo_method.addItems(["Boxcar", "Gaussian", "Savitzky-Golay"])
+        method_layout.addWidget(self.combo_method)
+        layout.addLayout(method_layout)
+        
+        self.param_stack = QStackedWidget()
+        
+        self.widget_boxcar = QWidget()
+        boxcar_layout = QHBoxLayout(self.widget_boxcar)
+        boxcar_layout.setContentsMargins(0, 0, 0, 0)
+        boxcar_layout.addWidget(QLabel("Window Size (pixels):"))
+        self.spin_boxcar_w = QSpinBox()
+        self.spin_boxcar_w.setRange(2, 1000)
+        self.spin_boxcar_w.setValue(3)
+        boxcar_layout.addWidget(self.spin_boxcar_w)
+        boxcar_layout.addStretch()
+        self.param_stack.addWidget(self.widget_boxcar)
+        
+        self.widget_gauss = QWidget()
+        gauss_layout = QHBoxLayout(self.widget_gauss)
+        gauss_layout.setContentsMargins(0, 0, 0, 0)
+        gauss_layout.addWidget(QLabel("Sigma (pixels):"))
+        self.spin_gauss_sigma = QDoubleSpinBox()
+        self.spin_gauss_sigma.setRange(0.1, 500.0)
+        self.spin_gauss_sigma.setValue(1.0)
+        self.spin_gauss_sigma.setSingleStep(0.5)
+        gauss_layout.addWidget(self.spin_gauss_sigma)
+        gauss_layout.addStretch()
+        self.param_stack.addWidget(self.widget_gauss)
+        
+        self.widget_savgol = QWidget()
+        savgol_layout = QHBoxLayout(self.widget_savgol)
+        savgol_layout.setContentsMargins(0, 0, 0, 0)
+        savgol_layout.addWidget(QLabel("Window Size:"))
+        self.spin_savgol_w = QSpinBox()
+        self.spin_savgol_w.setRange(3, 999)
+        self.spin_savgol_w.setSingleStep(2)
+        self.spin_savgol_w.setValue(5)
+        savgol_layout.addWidget(self.spin_savgol_w)
+        
+        savgol_layout.addWidget(QLabel("Poly Order:"))
+        self.spin_savgol_p = QSpinBox()
+        self.spin_savgol_p.setRange(1, 10)
+        self.spin_savgol_p.setValue(2)
+        savgol_layout.addWidget(self.spin_savgol_p)
+        savgol_layout.addStretch()
+        self.param_stack.addWidget(self.widget_savgol)
+        
+        layout.addWidget(self.param_stack)
+        
+        self.combo_method.currentIndexChanged.connect(self.param_stack.setCurrentIndex)
+        self.spin_savgol_w.valueChanged.connect(self.validate_savgol)
+        
+        btn_layout = QHBoxLayout()
+        btn_apply = QPushButton("Apply")
+        btn_apply.setStyleSheet("background-color: #27ae60; font-weight: bold; color: white;")
+        btn_cancel = QPushButton("Cancel")
+        btn_apply.clicked.connect(self._on_apply)
+        btn_cancel.clicked.connect(self.reject)
+        btn_layout.addStretch()
+        btn_layout.addWidget(btn_apply)
+        btn_layout.addWidget(btn_cancel)
+        layout.addLayout(btn_layout)
+        
+    def _on_apply(self):
+        params = self.get_params()
+        if params:
+            self.apply_clicked.emit(params)
+        
+    def validate_savgol(self, value):
+        if value % 2 == 0:
+            self.spin_savgol_w.setValue(value + 1)
+            
+    def get_params(self):
+        method = self.combo_method.currentText()
+        if method == "Boxcar":
+            return {"method": "boxcar", "window": self.spin_boxcar_w.value()}
+        elif method == "Gaussian":
+            return {"method": "gaussian", "sigma": self.spin_gauss_sigma.value()}
+        elif method == "Savitzky-Golay":
+            w = self.spin_savgol_w.value()
+            p = self.spin_savgol_p.value()
+            if p >= w:
+                p = w - 1
+            return {"method": "savgol", "window": w, "polyorder": p}
+        return None
+
+
+# ==============================================================================
+# CHANNEL GRID DIALOG
+# ==============================================================================
