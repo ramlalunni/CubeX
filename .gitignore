@@ -27,6 +27,7 @@ env/
 build/
 dist/
 dists_prev/
+spec/
 *.spec
 
 # =========================
@@ -36,3 +37,8 @@ dists_prev/
 .idea/
 .DS_Store
 Thumbs.db
+
+# ============================
+# Experimental files and notes
+# ============================
+scratch/
