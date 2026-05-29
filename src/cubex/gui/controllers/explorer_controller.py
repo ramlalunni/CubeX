@@ -13,9 +13,9 @@ import astropy.units as u
 from astropy.io import fits
 from astropy.wcs import WCS
 import astropy.constants as const
-from src.gui.controllers.workers import MomentWorker
-from src.gui.components.graph_panels import make_roi_rotatable_with_ctrl
-from src.gui.dialogs import ContourDialog
+from cubex.gui.controllers.workers import MomentWorker
+from cubex.gui.components.graph_panels import make_roi_rotatable_with_ctrl
+from cubex.gui.dialogs import ContourDialog
 
 class ExplorerController(QObject):
     """
@@ -1411,7 +1411,7 @@ class ExplorerController(QObject):
         cut_dict = next((item for item in self.view.pv_cuts if item["roi"] == selected_roi), None)
         if cut_dict is None:
             return
-        from src.gui.dialogs import RegionPropertiesDialog
+        from cubex.gui.dialogs import RegionPropertiesDialog
         if getattr(self.view, '_pv_edit_dialog', None) and self.view._pv_edit_dialog.isVisible():
             self.view._pv_edit_dialog.raise_()
             self.view._pv_edit_dialog.activateWindow()
@@ -1591,7 +1591,7 @@ class ExplorerController(QObject):
                 bmaj_arcsec = bmaj_deg * 3600.0
                 bmin_arcsec = bmin_deg * 3600.0
                 
-                from src.gui.components.custom_widgets import get_pyqt_angle
+                from cubex.gui.components.custom_widgets import get_pyqt_angle
                 new_roi = pg.EllipseROI([cx, cy], [bmaj_arcsec, bmin_arcsec], pen='#f1c40f')
                 new_roi.setAngle(get_pyqt_angle(bpa_deg), center=[0.5, 0.5])
                 for handle in list(new_roi.getHandles()):

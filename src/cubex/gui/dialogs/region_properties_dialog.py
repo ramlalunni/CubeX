@@ -254,14 +254,14 @@ class RegionPropertiesDialog(QDialog):
             if self.is_polyline: return
             pos = self.roi.pos()
             size = self.roi.size()
-            from src.gui.components.custom_widgets import get_casa_pa
+            from cubex.gui.components.custom_widgets import get_casa_pa
             angle = get_casa_pa(self.roi)
             
             w, h = size.x(), size.y()
             cx = pos.x() + w / 2.0
             cy = pos.y() + h / 2.0
             
-            from src.utils.wcs_helpers import get_ra_dec_str, calculate_position_angle
+            from cubex.utils.wcs_helpers import get_ra_dec_str, calculate_position_angle
 
             if self.is_line:
                 # Update line endpoints
@@ -368,7 +368,7 @@ class RegionPropertiesDialog(QDialog):
         float
             Decimal coordinate.
         """
-        from src.utils.wcs_helpers import parse_coord_string
+        from cubex.utils.wcs_helpers import parse_coord_string
         return parse_coord_string(val_str, is_ra)
 
     def apply_to_roi(self):
@@ -429,7 +429,7 @@ class RegionPropertiesDialog(QDialog):
                 self.roi.blockSignals(True)
                 self.roi.setPos([pos_x, pos_y])
                 self.roi.setSize([w_val, h_val])
-                from src.gui.components.custom_widgets import get_pyqt_angle
+                from cubex.gui.components.custom_widgets import get_pyqt_angle
                 self.roi.setAngle(get_pyqt_angle(pa_val), center=[0.5, 0.5])
                 self.roi.blockSignals(False)
                 

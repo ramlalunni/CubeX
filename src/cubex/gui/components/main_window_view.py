@@ -110,10 +110,10 @@ class ExportRegionsDialog(QDialog):
         return self.include_title_cb.isChecked() if self.include_title_cb else True
 
 # Import the tab environment we built
-from src.gui.components.explorer_view import ExplorerView
-from src.core.math_kernels import _NUMBA_AVAILABLE
-from src.gui.dialogs import ContourDialog
-from src.gui.controllers.main_controller import MainController
+from cubex.gui.components.explorer_view import ExplorerView
+from cubex.core.math_kernels import _NUMBA_AVAILABLE
+from cubex.gui.dialogs import ContourDialog
+from cubex.gui.controllers.main_controller import MainController
 
 # ==============================================================================
 # MAIN WINDOW APP
@@ -366,7 +366,7 @@ class KinematicExplorerApp(QMainWindow):
 
     def add_new_tab(self):
         """Instantiate and append a new, empty workspace tab to the tab bar."""
-        from src.gui.components.explorer_view import ExplorerView
+        from cubex.gui.components.explorer_view import ExplorerView
         tab = ExplorerView(self)
         idx = self.tabs.addTab(tab, "Untitled")
         self.tabs.setCurrentIndex(idx)

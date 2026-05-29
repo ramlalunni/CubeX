@@ -29,26 +29,26 @@ from spectral_cube import SpectralCube
 import qtawesome as qta
 
 # Import our modularized components
-from src.core.splatalogue import SplatalogueWorker
-from src.gui.components.custom_widgets import JumpSlider, fix_axis_scaling, WCSAxisItem
-from src.gui.dialogs import LineCatalogDialog, LineSelectionDialog, ContourDialog, ContourOptionsDialog
+from cubex.core.splatalogue import SplatalogueWorker
+from cubex.gui.components.custom_widgets import JumpSlider, fix_axis_scaling, WCSAxisItem
+from cubex.gui.dialogs import LineCatalogDialog, LineSelectionDialog, ContourDialog, ContourOptionsDialog
 
-from src.core.math_kernels import _NUMBA_AVAILABLE, _bilinear_interp, _compute_moments_12
+from cubex.core.math_kernels import _NUMBA_AVAILABLE, _bilinear_interp, _compute_moments_12
 
 
 # ==============================================================================
 # BACKGROUND WORKER — moment maps & PV diagrams
 # ==============================================================================
 
-from src.gui.controllers.workers import MomentWorker
+from cubex.gui.controllers.workers import MomentWorker
 
 
 # ==============================================================================
 # INDIVIDUAL EXPLORER TAB
 # ==============================================================================
 
-from src.gui.components.graph_panels import make_roi_rotatable_with_ctrl, ChannelMapViewBox, SpectrumViewBox
-from src.gui.controllers.explorer_controller import ExplorerController
+from cubex.gui.components.graph_panels import make_roi_rotatable_with_ctrl, ChannelMapViewBox, SpectrumViewBox
+from cubex.gui.controllers.explorer_controller import ExplorerController
 
 class ExplorerView(QWidget):
     """
@@ -949,7 +949,7 @@ class ExplorerView(QWidget):
             self._region_dialog.activateWindow()
             return
             
-        from src.gui.dialogs import SpectralSmoothingDialog
+        from cubex.gui.dialogs import SpectralSmoothingDialog
         self._smooth_dialog_active = True
         
         self._smooth_dialog = SpectralSmoothingDialog(self.window())
@@ -3245,7 +3245,7 @@ class ExplorerView(QWidget):
             msg.setWindowFlags(msg.windowFlags() | Qt.WindowStaysOnTopHint)
             msg.exec_()
             return
-        from src.gui.dialogs import RegionPropertiesDialog
+        from cubex.gui.dialogs import RegionPropertiesDialog
         # If an edit dialog is already open for this ROI, just raise it
         if getattr(self, '_region_dialog', None) and self._region_dialog.isVisible():
             self._region_dialog.raise_()
@@ -3856,8 +3856,8 @@ class ExplorerView(QWidget):
         Open a floating grid view window to display multiple contiguous spectral channel maps simultaneously.
         """
         if self._channel_grid_popup is None:
-            from src.gui.components.channel_grid_view import ChannelGridView
-            from src.gui.controllers.channel_grid_controller import ChannelGridController
+            from cubex.gui.components.channel_grid_view import ChannelGridView
+            from cubex.gui.controllers.channel_grid_controller import ChannelGridController
             
             self._channel_grid_popup = ChannelGridView(self.window())
             self._channel_grid_controller = ChannelGridController(self._channel_grid_popup, self)

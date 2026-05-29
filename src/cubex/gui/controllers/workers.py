@@ -7,7 +7,7 @@ diagram generation) off the main Qt thread to keep the UI responsive.
 import numpy as np
 import warnings
 from PyQt5.QtCore import QThread, pyqtSignal
-from src.core.math_kernels import _compute_moments_12, _bilinear_interp
+from cubex.core.math_kernels import _compute_moments_12, _bilinear_interp
 
 class MomentWorker(QThread):
     """
@@ -104,7 +104,7 @@ class MomentWorker(QThread):
                     continue
 
                 p1, p2 = pv_points
-                offsets, pv_data = MomentWorker._sample_along_line(
+                offsets, pv_data = MomentWorker._sample_pv_along_line(
                     p1, p2, pv_cube, nx, ny, pix_scale, width=pv_width
                 )
                 if offsets is None or pv_data is None or pv_data.size == 0:
@@ -231,9 +231,11 @@ class MomentWorker(QThread):
 
     # ------------------------------------------------------------------
     @staticmethod
-    def _sample_along_line(p1, p2, cube_data, nx, ny, pix_scale_arcsec, width=1):
+    def _sample_pv_along_line(p1, p2, cube_data, nx, ny, pix_scale_arcsec, width=1):
         """
-        Extract a Position-Velocity slice using bilinear interpolation.
+        Extract a Position-Velocity (PV) slice using bilinear interpolation. 
+        This is the core orchestration engine used to generate PV diagrams, 
+        utilizing math_kernels._bilinear_interp for the underlying mathematical sampling.
 
         Parameters
         ----------
@@ -304,7 +306,7 @@ class MomentWorker(QThread):
             off_p1 = np.array([p1[0] + off_x, p1[1] + off_y], dtype=float)
             off_p2 = np.array([p2[0] + off_x, p2[1] + off_y], dtype=float)
 
-            _, samples = MomentWorker._sample_along_line(
+            _, samples = MomentWorker._sample_pv_along_line(
                 off_p1, off_p2, cube_data, nx, ny, pix_scale_arcsec, width=1
             )
             if samples is not None:

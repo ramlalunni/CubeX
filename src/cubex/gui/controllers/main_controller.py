@@ -193,9 +193,9 @@ class MainController:
         -------
         None
         """
-        from src.core.exporters import export_spectrum_csv_core
+        from cubex.core.exporters import export_spectrum_csv_core
         # Circular import resolution for dialogs
-        from src.gui.dialogs import ExportRegionsDialog
+        from cubex.gui.dialogs import ExportRegionsDialog
         tab = self.view.get_active_tab()
         if tab and tab.cube_clean is not None:
             curves = self._get_active_spectrum_curves(tab)
@@ -249,8 +249,8 @@ class MainController:
         -------
         None
         """
-        from src.core.exporters import export_spectrum_fits_core
-        from src.gui.dialogs import ExportRegionsDialog
+        from cubex.core.exporters import export_spectrum_fits_core
+        from cubex.gui.dialogs import ExportRegionsDialog
         tab = self.view.get_active_tab()
         if not tab or tab.cube_clean is None: return
         
@@ -291,8 +291,8 @@ class MainController:
         -------
         None
         """
-        from src.core.exporters import export_spectrum_pdf_core
-        from src.gui.dialogs import ExportRegionsDialog
+        from cubex.core.exporters import export_spectrum_pdf_core
+        from cubex.gui.dialogs import ExportRegionsDialog
         tab = self.view.get_active_tab()
         if not tab or tab.cube_clean is None: return
         
@@ -352,7 +352,7 @@ class MainController:
         -------
         None
         """
-        from src.core.exporters import export_fits_active_core
+        from cubex.core.exporters import export_fits_active_core
         tab = self.view.get_active_tab()
         if not tab or tab.cube_clean is None: return
         target_id = tab.last_clicked_panel_id
@@ -443,7 +443,7 @@ class MainController:
         -------
         None
         """
-        from src.core.exporters import export_pdf_active_core
+        from cubex.core.exporters import export_pdf_active_core
         tab = self.view.get_active_tab()
         if not tab or tab.cube_clean is None: return
         target_id = tab.last_clicked_panel_id
@@ -516,7 +516,7 @@ class MainController:
 
     def show_contour_dialog(self):
         """Open the contour configuration dialog for the most recently clicked 2D plot panel."""
-        from src.gui.dialogs import ContourDialog
+        from cubex.gui.dialogs import ContourDialog
         from PyQt5.QtCore import Qt
         tab = self.view.get_active_tab()
         if not tab or tab.cube_clean is None: 
