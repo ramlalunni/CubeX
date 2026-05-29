@@ -1,3 +1,9 @@
+"""
+Module defining background worker threads for CubeX.
+
+These workers execute expensive data processing tasks (like moment map and PV 
+diagram generation) off the main Qt thread to keep the UI responsive.
+"""
 import numpy as np
 import warnings
 from PyQt5.QtCore import QThread, pyqtSignal
@@ -6,22 +12,61 @@ from src.core.math_kernels import _compute_moments_12, _bilinear_interp
 class MomentWorker(QThread):
     """
     Computes all moment maps and PV diagram data in a background thread.
-    No Qt or PyQtGraph calls are made here — only plain NumPy.
-    Emits result_ready(dict) when finished, or returns silently if cancelled.
+
+    No Qt GUI or PyQtGraph calls are made here — only plain NumPy and Numba.
+    Emits `result_ready` with a dictionary payload when finished, or returns 
+    silently if cancelled.
+
+    Attributes
+    ----------
+    result_ready : PyQt5.QtCore.pyqtSignal
+        Signal emitted when computation is complete, containing the results dict.
+    params : dict
+        The configuration parameters for the current calculation batch.
+    generation : int
+        An ID tag to ensure out-of-order background threads are ignored by the UI.
     """
     result_ready = pyqtSignal(dict)
 
     def __init__(self, params: dict, generation: int):
+        """
+        Initialize the MomentWorker.
+
+        Parameters
+        ----------
+        params : dict
+            Dictionary containing the data cube, threshold settings, and panel configs.
+        generation : int
+            The generation counter from the controller to track obsolete runs.
+        """
         super().__init__()
         self.params = params
         self.generation = generation
         self._cancelled = False
 
     def cancel(self):
+        """
+        Cancel the ongoing calculation at the next available checkpoint.
+
+        Returns
+        -------
+        None
+        """
         self._cancelled = True
 
     # ------------------------------------------------------------------
     def run(self):
+        """
+        Execute the moment map and PV diagram calculations.
+
+        Iterates over the provided panel configurations, evaluating thresholded
+        moment products (M0, M1, M2, M8, M9) and PV slices using the underlying
+        math kernels.
+
+        Returns
+        -------
+        None
+        """
         p = self.params
         selected_cube = p['selected_cube']   # (Nv, Nx, Ny) numpy array
         sub_v         = p['sub_v']
@@ -188,11 +233,31 @@ class MomentWorker(QThread):
     @staticmethod
     def _sample_along_line(p1, p2, cube_data, nx, ny, pix_scale_arcsec, width=1):
         """
-        Pure-NumPy bilinear interpolation along a line through the cube.
-        p1, p2 are world-coordinate arrays [x_arcsec, y_arcsec].
-        width is the number of pixels averaged perpendicular to the cut
-        (1 = no averaging).
-        Returns (offsets, samples.T).
+        Extract a Position-Velocity slice using bilinear interpolation.
+
+        Parameters
+        ----------
+        p1 : array_like
+            Starting world-coordinate point [x_arcsec, y_arcsec].
+        p2 : array_like
+            Ending world-coordinate point [x_arcsec, y_arcsec].
+        cube_data : numpy.ndarray
+            The 3D data cube to sample from (Nv, Nx, Ny).
+        nx : int
+            Number of pixels in the spatial X axis.
+        ny : int
+            Number of pixels in the spatial Y axis.
+        pix_scale_arcsec : float
+            The pixel scale in arcseconds.
+        width : int, optional
+            Number of pixels to average perpendicular to the cut, by default 1.
+
+        Returns
+        -------
+        tuple
+            A 2-tuple containing:
+            - offsets (numpy.ndarray): 1D array of spatial offsets along the cut.
+            - pv_data (numpy.ndarray): 2D array of extracted fluxes (Offsets, Velocity).
         """
         if width < 1:
             width = 1

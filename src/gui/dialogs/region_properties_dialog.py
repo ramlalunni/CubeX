@@ -1,3 +1,10 @@
+"""
+Module containing the dialog for editing geometric properties of Regions of Interest (ROIs).
+
+This dialog provides exact numerical control over shapes (center, size, angle) 
+in both pixel/image and astronomical world coordinate systems.
+"""
+
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel, 
                              QPushButton, QLineEdit, QComboBox, QDoubleSpinBox, 
@@ -11,10 +18,39 @@ import matplotlib.pyplot as plt
 
 class RegionPropertiesDialog(QDialog):
     """
-    Dialog to adjust the properties (center, size, P.A.) of Ellipse and Rectangle ROIs.
-    Supports Image and World coordinates (if WCS is available).
+    Dialog to adjust the properties (center, size, P.A.) of ROIs on the map.
+
+    Supports Image and World coordinate modifications (if WCS is available) 
+    for shapes like Ellipse, Rectangle, Point, and Line.
+
+    Attributes
+    ----------
+    roi : pyqtgraph.ROI
+        The actual pyqtgraph Region of Interest object being edited.
+    roi_dict : dict
+        The associated metadata dictionary tracking this ROI in the main app.
+    tab : ExplorerView
+        The parent explorer tab instance.
+    use_world : bool
+        Flag indicating if coordinates should be displayed/edited in WCS world coords.
+    wcs : astropy.wcs.WCS or None
+        The associated WCS object for the map if loaded.
     """
     def __init__(self, roi, explorer_view, parent=None, roi_dict=None):
+        """
+        Initialize the RegionPropertiesDialog.
+
+        Parameters
+        ----------
+        roi : pyqtgraph.ROI
+            The target pyqtgraph ROI object to modify.
+        explorer_view : ExplorerView
+            The parent explorer tab containing the 2D map.
+        parent : PyQt5.QtWidgets.QWidget, optional
+            The parent widget, by default None.
+        roi_dict : dict, optional
+            The dictionary representing ROI metadata, by default None.
+        """
         super().__init__(parent or explorer_view)
         
         self.roi = roi
@@ -37,6 +73,9 @@ class RegionPropertiesDialog(QDialog):
         self.roi.sigRegionChanged.connect(self.update_from_roi)
 
     def initUI(self):
+        """
+        Build the UI elements dynamically based on the ROI type.
+        """
         layout = QVBoxLayout(self)
         
         if self.roi_dict is not None:
@@ -199,10 +238,16 @@ class RegionPropertiesDialog(QDialog):
         self._updating = False
 
     def toggle_coord_mode(self):
+        """
+        Switch between Image (Pixel/Arcsec offset) and World (RA/Dec) coordinate systems.
+        """
         self.use_world = self.rad_world.isChecked()
         self.update_from_roi()
 
     def update_from_roi(self):
+        """
+        Pull spatial coordinates and dimensions from the ROI object to populate the dialog text fields.
+        """
         if self._updating: return
         self._updating = True
         try:
@@ -308,10 +353,28 @@ class RegionPropertiesDialog(QDialog):
             self._updating = False
 
     def _parse_coord(self, val_str, is_ra=True):
+        """
+        Parse string coordinates into decimal degrees.
+
+        Parameters
+        ----------
+        val_str : str
+            The coordinate string (e.g. '12h34m56s' or '12:34:56').
+        is_ra : bool, optional
+            Whether this string is a Right Ascension coordinate, by default True.
+
+        Returns
+        -------
+        float
+            Decimal coordinate.
+        """
         from src.utils.wcs_helpers import parse_coord_string
         return parse_coord_string(val_str, is_ra)
 
     def apply_to_roi(self):
+        """
+        Push user edits from the center/size/angle fields back to the ROI object.
+        """
         if self._updating: return
         self._updating = True
         try:
@@ -378,6 +441,9 @@ class RegionPropertiesDialog(QDialog):
             self.update_from_roi()
 
     def apply_to_roi_from_bounds(self):
+        """
+        Push user edits from the bottom-left/top-right bounding box fields back to a Rectangle ROI.
+        """
         if self._updating: return
         self._updating = True
         try:
@@ -417,6 +483,9 @@ class RegionPropertiesDialog(QDialog):
             self.update_from_roi()
 
     def apply_name(self):
+        """
+        Update the name of the ROI in all relevant UI lists and dictionaries.
+        """
         if self.roi_dict:
             new_name = self.edit_name.text().strip()
             if new_name:
@@ -453,6 +522,14 @@ class RegionPropertiesDialog(QDialog):
                         self.tab.refresh_spectral_stats_apertures()
 
     def apply_width(self, value):
+        """
+        Update the spatial integration width for a PV Cut ROI.
+
+        Parameters
+        ----------
+        value : int
+            The new width in pixels (must be odd).
+        """
         if value % 2 == 0:
             value += 1
             self.spin_width.blockSignals(True)
@@ -467,6 +544,9 @@ class RegionPropertiesDialog(QDialog):
                 self.tab.update_moment_maps()
 
     def apply_to_line(self):
+        """
+        Push user edits from the endpoint coordinate fields back to a Line ROI.
+        """
         if self._updating: return
         self._updating = True
         try:
@@ -503,10 +583,3 @@ class RegionPropertiesDialog(QDialog):
         finally:
             self._updating = False
             self.update_from_roi()
-
-
-# ==============================================================================
-# SPECTRAL SMOOTHING DIALOG
-# ==============================================================================
-from PyQt5.QtCore import pyqtSignal
-

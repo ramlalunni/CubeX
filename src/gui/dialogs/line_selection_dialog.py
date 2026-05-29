@@ -1,3 +1,9 @@
+"""
+Module containing the dialog for filtering and selecting queried catalog lines.
+
+Presents the parsed Splatalogue data in a tabular format, allowing users
+to selectively pick which transitions to plot over the 1D spectrum.
+"""
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel, 
                              QPushButton, QLineEdit, QComboBox, QDoubleSpinBox, 
@@ -13,8 +19,31 @@ class LineSelectionDialog(QDialog):
     """
     Dialog to display fetched Splatalogue lines and allow the user to select 
     which ones to plot on the spectrum.
+
+    Attributes
+    ----------
+    parsed_data : list of dict
+        The full list of parsed molecular line dictionaries from the Astroquery call.
+    v_sys : float
+        The user-provided systemic velocity (in km/s) used during the query.
+    selected_rows : list of dict
+        The subset of `parsed_data` that the user has selected to plot.
+    table : PyQt5.QtWidgets.QTableWidget
+        The UI table widget displaying the line catalog.
     """
     def __init__(self, parent, parsed_data, v_sys):
+        """
+        Initialize the LineSelectionDialog.
+
+        Parameters
+        ----------
+        parent : PyQt5.QtWidgets.QWidget
+            The parent widget.
+        parsed_data : list of dict
+            List of transition metadata retrieved from Splatalogue.
+        v_sys : float
+            The systemic velocity of the source in km/s.
+        """
         super().__init__(parent)
         self.setWindowTitle("Select Lines to Overlay")
         self.resize(900, 450)
@@ -80,10 +109,21 @@ class LineSelectionDialog(QDialog):
         layout.addLayout(btn_layout)
 
     def toggle_all(self, state):
+        """
+        Check or uncheck all checkboxes in the table.
+
+        Parameters
+        ----------
+        state : Qt.CheckState
+            The check state to apply to all rows.
+        """
         for i in range(self.table.rowCount()):
             self.table.item(i, 0).setCheckState(state)
 
     def select_species(self):
+        """
+        Check all transitions belonging to the species of currently selected/checked rows.
+        """
         target_molecules = set()
         for i in range(self.table.rowCount()):
             if self.table.item(i, 0).checkState() == Qt.Checked:
@@ -100,13 +140,11 @@ class LineSelectionDialog(QDialog):
                     self.table.item(i, 0).setCheckState(Qt.Checked)
 
     def accept(self):
+        """
+        Store the selected rows into `self.selected_rows` and accept the dialog.
+        """
         self.selected_rows = []
         for i in range(self.table.rowCount()):
             if self.table.item(i, 0).checkState() == Qt.Checked:
                 self.selected_rows.append(self.parsed_data[i])
         super().accept()
-
-
-# ==============================================================================
-# CONTOUR DIALOG
-# ==============================================================================

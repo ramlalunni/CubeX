@@ -1,3 +1,9 @@
+"""
+Module defining the controller for the overarching KinematicExplorerApp.
+
+This handles application-wide actions such as file loading, export routines,
+and communicating state changes across multiple tabs.
+"""
 import os
 import numpy as np
 import pyqtgraph as pg
@@ -7,12 +13,37 @@ from astropy.wcs import WCS
 class MainController:
     """
     Controller for the overarching KinematicExplorerApp (Main Window).
-    Handles file loading logic, overarching application state, and cross-tab export actions.
+
+    Handles global file loading logic, application state, and cross-tab 
+    export actions. Delegates tab-specific actions to the active `ExplorerView`.
+
+    Attributes
+    ----------
+    view : KinematicExplorerApp
+        The main application window view.
     """
     def __init__(self, view):
+        """
+        Initialize the MainController.
+
+        Parameters
+        ----------
+        view : KinematicExplorerApp
+            The main application window instance.
+        """
         self.view = view
 
     def load_file(self):
+        """
+        Open a file dialog to load a new FITS cube.
+
+        If the current tab is empty, the file is loaded into the active tab.
+        Otherwise, a new tab is spawned.
+
+        Returns
+        -------
+        None
+        """
         options = QFileDialog.Options()
         file_name, _ = QFileDialog.getOpenFileName(self.view, "Open FITS Cube", "", "FITS (*.fits *.fits.gz);;All (*)", options=options)
         if file_name:
@@ -36,6 +67,7 @@ class MainController:
                 self.view.statusBar().showMessage("Load failed.")
 
     def load_overlay_file(self):
+        """Prompt the user to select and load a FITS file as a contour overlay on the active tab."""
         tab = self.view.get_active_tab()
         if not tab or tab.cube_clean is None:
             QMessageBox.warning(self.view, "No Data", "Please load a primary cube first.")
@@ -50,6 +82,7 @@ class MainController:
             tab.load_overlay_file(file_name)
 
     def close_cube(self):
+        """Close the currently active cube and reset the tab state to default."""
         tab = self.view.get_active_tab()
         if tab:
             tab.close_file()
@@ -57,6 +90,19 @@ class MainController:
             self.view.statusBar().showMessage("Cube closed.")
 
     def _get_active_spectrum_curves(self, tab):
+        """
+        Retrieve a dictionary of the currently active (visible) 1D spectral curves in the provided tab.
+        
+        Parameters
+        ----------
+        tab : ExplorerView
+            The tab to query for active spectrum curves.
+            
+        Returns
+        -------
+        dict
+            A dictionary mapping region names to their active pyqtgraph curve objects.
+        """
         is_smooth = False
         if getattr(tab, 'spectrum_tabs', None) is not None and getattr(tab, 'plot_widget_smooth', None) is not None:
             if tab.spectrum_tabs.currentWidget() == tab.plot_widget_smooth:
@@ -80,6 +126,19 @@ class MainController:
         return curves
 
     def _format_roi_props(self, roi):
+        """
+        Format the spatial properties (center, axes, position angle) of a given Region of Interest (ROI) into a descriptive string.
+        
+        Parameters
+        ----------
+        roi : pyqtgraph.ROI or None
+            The ROI object to describe, or None if representing the whole map.
+            
+        Returns
+        -------
+        str
+            A human-readable string describing the ROI geometry.
+        """
         import pyqtgraph as pg
         if not roi: return "Whole Map"
         if isinstance(roi, pg.EllipseROI) or isinstance(roi, pg.RectROI):
@@ -92,6 +151,19 @@ class MainController:
             return "Custom Polygon"
 
     def _get_save_pdf_filename_with_title_option(self, default_filename):
+        """
+        Open a save file dialog tailored for exporting plots to PDF, including a custom checkbox for adding a title.
+        
+        Parameters
+        ----------
+        default_filename : str
+            The suggested initial filename.
+            
+        Returns
+        -------
+        tuple
+            A tuple `(filename, include_title)` where `filename` is the selected path (or None) and `include_title` is a boolean.
+        """
         from PyQt5.QtWidgets import QCheckBox
         dialog = QFileDialog(self.view, "Save PDF", default_filename, "PDF Files (*.pdf)")
         dialog.setOption(QFileDialog.DontUseNativeDialog, False)
@@ -114,6 +186,13 @@ class MainController:
         return None, False
 
     def export_spectrum(self):
+        """
+        Export the selected 1D spectral regions to a CSV file.
+
+        Returns
+        -------
+        None
+        """
         from src.core.exporters import export_spectrum_csv_core
         # Circular import resolution for dialogs
         from src.gui.dialogs import ExportRegionsDialog
@@ -163,6 +242,13 @@ class MainController:
             QMessageBox.warning(self.view, "No Data", "No cube loaded to export.")
 
     def export_spectrum_fits(self):
+        """
+        Export the selected 1D spectral regions to a 1D FITS file.
+
+        Returns
+        -------
+        None
+        """
         from src.core.exporters import export_spectrum_fits_core
         from src.gui.dialogs import ExportRegionsDialog
         tab = self.view.get_active_tab()
@@ -198,6 +284,13 @@ class MainController:
                 QMessageBox.critical(self.view, "Error", f"Failed to save FITS:\n{str(e)}")
 
     def export_spectrum_pdf(self):
+        """
+        Export the selected 1D spectral plots to a PDF document.
+
+        Returns
+        -------
+        None
+        """
         from src.core.exporters import export_spectrum_pdf_core
         from src.gui.dialogs import ExportRegionsDialog
         tab = self.view.get_active_tab()
@@ -252,6 +345,13 @@ class MainController:
                 QMessageBox.critical(self.view, "Error", f"Failed to save PDF:\n{str(e)}")
 
     def export_fits_active(self):
+        """
+        Export the currently active 2D panel to a FITS file.
+
+        Returns
+        -------
+        None
+        """
         from src.core.exporters import export_fits_active_core
         tab = self.view.get_active_tab()
         if not tab or tab.cube_clean is None: return
@@ -336,6 +436,13 @@ class MainController:
                 QMessageBox.critical(self.view, "Error", f"Failed to save FITS:\n{str(e)}")
 
     def export_pdf_active(self):
+        """
+        Export the currently active 2D panel to a PDF document.
+
+        Returns
+        -------
+        None
+        """
         from src.core.exporters import export_pdf_active_core
         tab = self.view.get_active_tab()
         if not tab or tab.cube_clean is None: return
@@ -381,6 +488,7 @@ class MainController:
                 QMessageBox.critical(self.view, "Error", f"Failed to save PDF:\n{str(e)}")
 
     def show_header(self):
+        """Display the primary FITS header of the active cube in a popup dialog."""
         from PyQt5.QtWidgets import QVBoxLayout, QTextEdit
         tab = self.view.get_active_tab()
         if tab and tab.cube_clean is not None:
@@ -398,6 +506,7 @@ class MainController:
             QMessageBox.warning(self.view, "No Data", "Please load a cube first.")
 
     def reset_views(self):
+        """Auto-range all 2D image and 1D spectrum plots in the active tab to fit their current data."""
         tab = self.view.get_active_tab()
         if tab:
             tab.view_channel.autoRange()
@@ -406,6 +515,7 @@ class MainController:
                 p['view'].autoRange()
 
     def show_contour_dialog(self):
+        """Open the contour configuration dialog for the most recently clicked 2D plot panel."""
         from src.gui.dialogs import ContourDialog
         from PyQt5.QtCore import Qt
         tab = self.view.get_active_tab()
@@ -429,10 +539,19 @@ class MainController:
         dlg.show()
 
     def open_line_catalog(self):
+        """Open the spectral line catalog tool for the active tab to overlay known transition lines."""
         tab = self.view.get_active_tab()
         if tab: tab.open_line_catalog()
 
     def set_colormap(self, cmap_name):
+        """
+        Apply a new colormap to all active 2D images (channel maps and moment maps) globally.
+        
+        Parameters
+        ----------
+        cmap_name : str
+            The name of the colormap to apply.
+        """
         self.view.current_cmap = cmap_name
         tab = self.view.get_active_tab()
         if tab and tab.cube_clean is not None:
@@ -444,6 +563,14 @@ class MainController:
                 tab.update_channel_map()
 
     def toggle_wcs(self, checked):
+        """
+        Toggle between absolute WCS coordinates (RA/Dec) and relative offset coordinates (arcsec) for all spatial axes.
+        
+        Parameters
+        ----------
+        checked : bool
+            True if absolute WCS coordinates should be used, False for relative offsets.
+        """
         self.view.is_absolute_wcs = checked
         for i in range(self.view.tabs.count()):
             tab = self.view.tabs.widget(i)

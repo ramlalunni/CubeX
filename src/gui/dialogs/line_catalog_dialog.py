@@ -1,3 +1,9 @@
+"""
+Module containing the dialog for querying molecular line databases.
+
+This dialog allows users to specify search parameters (v_sys, database, E_up, species)
+to fetch spectral line data from the Splatalogue catalog over the current frequency range.
+"""
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel, 
                              QPushButton, QLineEdit, QComboBox, QDoubleSpinBox, 
@@ -12,8 +18,29 @@ import matplotlib.pyplot as plt
 class LineCatalogDialog(QDialog):
     """
     Dialog to input parameters for querying the Splatalogue database.
+
+    Attributes
+    ----------
+    fmin : float
+        Minimum observed frequency in GHz.
+    fmax : float
+        Maximum observed frequency in GHz.
+    action : str
+        The action taken by the user ('query', 'clear', or 'cancel').
     """
     def __init__(self, parent, obs_fmin, obs_fmax):
+        """
+        Initialize the LineCatalogDialog.
+
+        Parameters
+        ----------
+        parent : PyQt5.QtWidgets.QWidget
+            The parent widget.
+        obs_fmin : float
+            Minimum observed frequency of the spectrum.
+        obs_fmax : float
+            Maximum observed frequency of the spectrum.
+        """
         super().__init__(parent)
         self.setWindowTitle("Molecular Line Catalog Query")
         self.setMinimumWidth(420)
@@ -80,14 +107,15 @@ class LineCatalogDialog(QDialog):
         self.action = 'cancel'
 
     def accept(self):
+        """
+        Set action to 'query' and accept the dialog.
+        """
         self.action = 'query'
         super().accept()
         
     def clear_lines(self):
+        """
+        Set action to 'clear' and accept the dialog.
+        """
         self.action = 'clear'
         super().accept()
-
-
-# ==============================================================================
-# LINE SELECTION DIALOG
-# ==============================================================================

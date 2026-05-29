@@ -1,3 +1,10 @@
+"""
+Module containing the dialog for managing multiple contour overlays.
+
+This dialog allows users to edit properties (levels, styling, smoothing) 
+for all active cross-file contour overlays on the main channel map, or 
+clear them individually.
+"""
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel, 
                              QPushButton, QLineEdit, QComboBox, QDoubleSpinBox, 
@@ -10,9 +17,31 @@ import pyqtgraph as pg
 import matplotlib.pyplot as plt
 
 class ContourOptionsDialog(QDialog):
+    """
+    Dialog window for editing settings of multiple active contour overlays.
+
+    Attributes
+    ----------
+    tab : ExplorerView
+        The parent explorer tab containing the overlays.
+    overlays : list of dict
+        List of dictionaries containing data and configurations for each active overlay.
+    tab_widget : PyQt5.QtWidgets.QTabWidget
+        The tabbed widget grouping configurations for each individual overlay.
+    """
     _LINE_STYLES = {'Solid': Qt.SolidLine, 'Dashed': Qt.DashLine, 'Dotted': Qt.DotLine}
 
     def __init__(self, parent, contour_overlays):
+        """
+        Initialize the ContourOptionsDialog.
+
+        Parameters
+        ----------
+        parent : ExplorerView
+            The parent explorer tab instance.
+        contour_overlays : list of dict
+            List of dictionaries containing data and configurations for each active overlay.
+        """
         super().__init__(parent)
         self.setWindowTitle("Contour Overlay Options")
         self.setMinimumWidth(500)
@@ -49,6 +78,9 @@ class ContourOptionsDialog(QDialog):
         layout.addLayout(btn_layout)
 
     def _on_apply(self):
+        """
+        Apply configuration changes to all active overlays and trigger redraws.
+        """
         for i in range(self.tab_widget.count()):
             new_opts = self._collect_tab_options(i)
             if 0 <= i < len(self.tab.contour_overlays):
@@ -58,10 +90,21 @@ class ContourOptionsDialog(QDialog):
         self.tab.update_spatial_analysis()
 
     def _on_clear_all(self):
+        """
+        Remove all active contour overlays from the channel map.
+        """
         self.tab.close_overlay()
         self.close()
 
     def _on_clear_single(self, idx):
+        """
+        Remove a single specific contour overlay from the channel map.
+
+        Parameters
+        ----------
+        idx : int
+            The index of the overlay to remove.
+        """
         self.tab.close_overlay(idx)
         self.tab_widget.removeTab(idx)
         if self.tab_widget.count() == 0:
@@ -70,6 +113,21 @@ class ContourOptionsDialog(QDialog):
             self.overlays = self.tab.contour_overlays
 
     def _create_overlay_tab(self, idx, ov):
+        """
+        Construct a configuration tab page for a given overlay.
+
+        Parameters
+        ----------
+        idx : int
+            The index of the overlay in the master list.
+        ov : dict
+            The overlay dictionary containing data and configuration.
+
+        Returns
+        -------
+        PyQt5.QtWidgets.QWidget
+            The generated configuration widget.
+        """
         widget = QWidget()
         layout = QVBoxLayout(widget)
         opts = ov['options']
@@ -282,6 +340,19 @@ class ContourOptionsDialog(QDialog):
         return widget
 
     def _collect_tab_options(self, tab_idx):
+        """
+        Extract the user-defined settings from a specific overlay tab.
+
+        Parameters
+        ----------
+        tab_idx : int
+            The index of the tab page.
+
+        Returns
+        -------
+        dict
+            A dictionary of the updated contour configuration settings.
+        """
         tab = self.tab_widget.widget(tab_idx)
         c = tab._controls
 

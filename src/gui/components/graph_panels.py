@@ -1,7 +1,28 @@
+"""
+Module defining custom PyQtGraph viewboxes and ROI behaviors.
+"""
 from PyQt5.QtCore import Qt
 import pyqtgraph as pg
 
 def make_roi_rotatable_with_ctrl(roi):
+    """
+    Modify a pyqtgraph.ROI object to support rotation when holding Ctrl.
+
+    Parameters
+    ----------
+    roi : pyqtgraph.ROI
+        The Region of Interest object to be modified.
+
+    Returns
+    -------
+    None
+
+    Notes
+    -----
+    This function monkey-patches the `movePoint` method of the ROI. When the
+    Control modifier is active, it changes the scale handles into rotation 
+    handles temporarily.
+    """
     original_move_point = roi.movePoint
     def custom_move_point(handle, pos, modifiers=Qt.NoModifier, finish=True, coords='parent'):
         h_dict = next((h for h in roi.handles if h['item'] == handle), None)
@@ -21,13 +42,53 @@ def make_roi_rotatable_with_ctrl(roi):
     roi.movePoint = custom_move_point
 
 class ChannelMapViewBox(pg.ViewBox):
+    """
+    Custom pyqtgraph.ViewBox for the 2D channel map.
+
+    This ViewBox intercepts mouse drag and click events to facilitate drawing
+    and selecting Regions of Interest (ROIs) for spatial and spectral analysis, 
+    as well as Position-Velocity (PV) cuts.
+
+    Attributes
+    ----------
+    drag_start : PyQt5.QtCore.QPointF or None
+        The starting point of a mouse drag event in data coordinates.
+    current_roi : pyqtgraph.ROI or None
+        The active ROI being drawn or modified.
+    parent_tab : ExplorerView or None
+        Reference to the parent ExplorerView for delegating UI state updates.
+    """
     def __init__(self, *args, **kwds):
+        """
+        Initialize the ChannelMapViewBox.
+
+        Parameters
+        ----------
+        *args
+            Variable length argument list passed to pyqtgraph.ViewBox.
+        **kwds
+            Arbitrary keyword arguments passed to pyqtgraph.ViewBox.
+        """
         super().__init__(*args, **kwds)
         self.drag_start = None
         self.current_roi = None
         self.parent_tab = None
 
     def mouseDragEvent(self, ev, axis=None):
+        """
+        Handle mouse drag events for drawing ROIs and PV cuts.
+
+        Parameters
+        ----------
+        ev : pyqtgraph.GraphicsScene.mouseEvents.MouseDragEvent
+            The mouse drag event object.
+        axis : int, optional
+            The axis index, by default None.
+
+        Returns
+        -------
+        None
+        """
         if ((ev.modifiers() == Qt.ControlModifier and ev.isStart()) or self.current_roi is not None) and self.parent_tab:
             mode = self.parent_tab.combo_panel_mode.currentText()
             if mode == "Spatial Analysis":
@@ -158,6 +219,18 @@ class ChannelMapViewBox(pg.ViewBox):
             super().mouseDragEvent(ev, axis)
 
     def mouseClickEvent(self, ev):
+        """
+        Handle mouse click events for selecting ROIs and PV cuts.
+
+        Parameters
+        ----------
+        ev : pyqtgraph.GraphicsScene.mouseEvents.MouseClickEvent
+            The mouse click event object.
+
+        Returns
+        -------
+        None
+        """
         if ev.modifiers() == Qt.ControlModifier and self.parent_tab:
             mode = self.parent_tab.combo_panel_mode.currentText()
             if mode == "Spatial Analysis":
@@ -208,7 +281,36 @@ class ChannelMapViewBox(pg.ViewBox):
         super().mouseClickEvent(ev)
 
 class SpectrumViewBox(pg.ViewBox):
+    """
+    Custom pyqtgraph.ViewBox for the 1D spectrum plot.
+
+    This ViewBox intercepts mouse drag events to allow drawing horizontal 
+    velocity regions used for calculating moment maps and spectral statistics.
+
+    Attributes
+    ----------
+    drag_start : PyQt5.QtCore.QPointF or None
+        The starting point of a mouse drag event in data coordinates.
+    current_roi : pyqtgraph.PlotDataItem or None
+        The active velocity region being drawn.
+    parent_tab : ExplorerView or None
+        Reference to the parent ExplorerView.
+    dragging_roi : pyqtgraph.PlotDataItem or None
+        The existing velocity region currently being moved.
+    dragging_roi_initial_x : list of float or None
+        The initial x-coordinates of the ROI before the drag started.
+    """
     def __init__(self, *args, **kwds):
+        """
+        Initialize the SpectrumViewBox.
+
+        Parameters
+        ----------
+        *args
+            Variable length argument list passed to pyqtgraph.ViewBox.
+        **kwds
+            Arbitrary keyword arguments passed to pyqtgraph.ViewBox.
+        """
         super().__init__(*args, **kwds)
         self.drag_start = None
         self.current_roi = None
@@ -217,6 +319,20 @@ class SpectrumViewBox(pg.ViewBox):
         self.dragging_roi_initial_x = None
 
     def mouseDragEvent(self, ev, axis=None):
+        """
+        Handle mouse drag events for drawing and moving velocity regions.
+
+        Parameters
+        ----------
+        ev : pyqtgraph.GraphicsScene.mouseEvents.MouseDragEvent
+            The mouse drag event object.
+        axis : int, optional
+            The axis index, by default None.
+
+        Returns
+        -------
+        None
+        """
         if (ev.modifiers() == Qt.ControlModifier and ev.isStart()) or self.current_roi is not None or getattr(self, 'dragging_roi', None) is not None:
             if ev.isStart():
                 mp = self.mapSceneToView(ev.buttonDownScenePos())
@@ -273,4 +389,16 @@ class SpectrumViewBox(pg.ViewBox):
             super().mouseDragEvent(ev, axis)
 
     def mouseClickEvent(self, ev):
+        """
+        Handle mouse click events.
+
+        Parameters
+        ----------
+        ev : pyqtgraph.GraphicsScene.mouseEvents.MouseClickEvent
+            The mouse click event object.
+
+        Returns
+        -------
+        None
+        """
         super().mouseClickEvent(ev)

@@ -1,3 +1,9 @@
+"""
+Module containing the main controller logic for the ExplorerView tab.
+
+This file orchestrates data processing, multi-threading for moment map generation,
+and complex UI interactions for spectral extraction and spatial profiling.
+"""
 import numpy as np
 from PyQt5.QtCore import QObject, Qt
 from PyQt5.QtWidgets import QMessageBox, QCheckBox, QLabel
@@ -12,11 +18,49 @@ from src.gui.components.graph_panels import make_roi_rotatable_with_ctrl
 from src.gui.dialogs import ContourDialog
 
 class ExplorerController(QObject):
+    """
+    Main controller for the CubeX data explorer tab.
+
+    This class handles data loading, background moment map computation,
+    ROI state management, spectral and spatial profiling, and coordinate 
+    conversions for a single open FITS cube.
+
+    Attributes
+    ----------
+    view : ExplorerView
+        The view component that this controller manipulates.
+    """
     def __init__(self, view):
+        """
+        Initialize the ExplorerController.
+
+        Parameters
+        ----------
+        view : ExplorerView
+            The parent explorer tab instance.
+        """
         super().__init__()
         self.view = view
 
     def get_velocity_subset(self, use_full_range=False):
+        """
+        Extract a subset of the data cube based on the selected velocity range.
+
+        Parameters
+        ----------
+        use_full_range : bool, optional
+            If True, returns the entire cube instead of the subset selected 
+            by the user's velocity region tool, by default False.
+
+        Returns
+        -------
+        tuple
+            A 4-tuple containing:
+            - cube_subset (numpy.ndarray or None): The filtered data cube.
+            - v_axis_subset (numpy.ndarray or None): The filtered velocity axis.
+            - minX (float or None): The minimum velocity boundary applied.
+            - maxX (float or None): The maximum velocity boundary applied.
+        """
         if self.view.cube_clean is None:
             return None, None, None, None
         if use_full_range:
@@ -33,6 +77,16 @@ class ExplorerController(QObject):
         return self.view.cube_clean[idx_min:idx_max, :, :], self.view.v_axis[idx_min:idx_max], minX, maxX
 
     def update_moment_maps(self):
+        """
+        Trigger a background thread to recalculate moment maps for all panels.
+
+        This parses the active velocity boundaries, noise thresholds, and PV 
+        cut configurations from the UI, and dispatches them to a `MomentWorker`.
+
+        Returns
+        -------
+        None
+        """
         if self.view.cube_clean is None:
             return
         if getattr(self.view, '_region_dragging', False):
@@ -108,6 +162,7 @@ class ExplorerController(QObject):
         self.view._moment_worker.start()
 
     def _purge_finished_workers(self):
+        """Remove any finished background worker threads from the internal tracking list."""
         alive = []
         for w in self.view._pending_workers:
             try:
@@ -118,6 +173,14 @@ class ExplorerController(QObject):
         self.view._pending_workers = alive
 
     def _on_moment_result(self, results: dict):
+        """
+        Handle the completion of a background moment map calculation.
+        
+        Parameters
+        ----------
+        results : dict
+            A dictionary containing the calculated moment maps, PV diagrams, and display metadata.
+        """
         if results['generation'] != self.view._moment_generation:
             return
         if self.view.cube_clean is None:
@@ -199,6 +262,24 @@ class ExplorerController(QObject):
                     self.view.update_beam_visualizers('moment', panel_id=panel_id)
 
     def load_file(self, file_name):
+        """
+        Load a FITS data cube or 2D image and configure the view.
+
+        This method attempts to use `spectral_cube` to standardise coordinates
+        and units (converting the third axis to Radio Velocity). If that fails,
+        it falls back to basic `astropy.io.fits` reading. It also extracts beam
+        parameters for brightness unit conversions.
+
+        Parameters
+        ----------
+        file_name : str
+            The absolute path to the FITS file.
+
+        Returns
+        -------
+        bool
+            True if the file was loaded successfully, False otherwise.
+        """
         try:
             self.view.current_file_name = file_name
             self.view.is_2d_image = False
@@ -238,15 +319,24 @@ class ExplorerController(QObject):
                     if data.ndim == 2:
                         self.view.is_2d_image = True
                         class MockData:
-                            def __init__(self, d): self._d = d
+                            def __init__(self, d): 
+                                """Initialize a mock data array wrapper."""
+                                self._d = d
                             @property
-                            def value(self): return np.expand_dims(self._d, axis=0)
-                            def __getitem__(self, key): return self
+                            def value(self): 
+                                """Return the mock data expanded to 3D for compatibility."""
+                                return np.expand_dims(self._d, axis=0)
+                            def __getitem__(self, key): 
+                                """Allow array-like slicing to simply return the mock instance itself."""
+                                return self
                         class MockAxis:
                             @property
-                            def value(self): return np.array([0.0])
+                            def value(self): 
+                                """Return a mock zero-velocity spectral axis."""
+                                return np.array([0.0])
                         class MockCube:
                             def __init__(self, d, h):
+                                """Initialize a dummy spectral cube object with 2D data and header."""
                                 self.header = h
                                 self.filled_data = MockData(d)
                                 self.spectral_axis = MockAxis()
@@ -469,6 +559,18 @@ class ExplorerController(QObject):
 
 
     def _run_spectral_stats_calc(self, popup):
+        """
+        Calculate statistical properties of extracted spectra across velocity bands.
+
+        Parameters
+        ----------
+        popup : SpectralStatsPopup
+            The active popup window containing the user's selected metrics.
+
+        Returns
+        -------
+        None
+        """
         selected_rois_1d = self.view._get_popup_selected_boxes(popup)
         selected_apertures = self.view._get_popup_selected_apertures(popup)
 
@@ -666,12 +768,33 @@ class ExplorerController(QObject):
 
 
     def get_pv_cut_by_name(self, name):
+        """
+        Retrieve a PV cut configuration dictionary by its display name.
+        
+        Parameters
+        ----------
+        name : str
+            The name of the PV cut (e.g., 'Cut 1').
+            
+        Returns
+        -------
+        dict or None
+            The dictionary representing the PV cut, or None if not found.
+        """
         for item in self.view.pv_cuts:
             if item["name"] == name:
                 return item
         return None
 
     def get_selected_pv_cut_name(self):
+        """
+        Retrieve the name of the currently selected PV cut in the UI.
+        
+        Returns
+        -------
+        str or None
+            The name of the selected cut, or None if no cut is selected.
+        """
         if not self.view.pv_cuts_to_delete:
             return None
         for item in self.view.pv_cuts:
@@ -680,6 +803,14 @@ class ExplorerController(QObject):
         return None
 
     def set_selected_pv_cut(self, name):
+        """
+        Set the actively selected PV cut by name, visually highlighting it on the channel map.
+        
+        Parameters
+        ----------
+        name : str
+            The name of the PV cut to select.
+        """
         self.view.pv_cuts_to_delete.clear()
         for item in self.view.pv_cuts:
             is_selected = item["name"] == name
@@ -691,6 +822,7 @@ class ExplorerController(QObject):
                 direction_item.setPen(pg.mkPen('#f1c40f' if is_selected else '#f7dc6f', width=3 if is_selected else 2))
 
     def refresh_all_pv_cut_combos(self):
+        """Refresh all PV cut dropdown menus in the UI with the latest available cuts."""
         cut_names = [item["name"] for item in self.view.pv_cuts]
         combos = []
         if hasattr(self.view, 'combo_pv_cuts'):
@@ -708,12 +840,28 @@ class ExplorerController(QObject):
             combo.blockSignals(False)
 
     def on_panel_pv_cut_selected(self, panel_id):
+        """
+        Handle a change in the PV cut dropdown selection for a specific bottom panel.
+        
+        Parameters
+        ----------
+        panel_id : int
+            The index of the bottom panel (0, 1, or 2).
+        """
         name = self.view.panels[panel_id]['combo_pv_cut'].currentText()
         if name != "None":
             self.view.set_selected_pv_cut(name)
         self.view.update_moment_maps()
 
     def delete_panel_pv_cut(self, panel_id):
+        """
+        Delete the PV cut currently selected in a specific bottom panel's dropdown menu.
+        
+        Parameters
+        ----------
+        panel_id : int
+            The index of the bottom panel requesting the deletion.
+        """
         name = self.view.panels[panel_id]['combo_pv_cut'].currentText()
         if name == "None":
             return
@@ -721,6 +869,14 @@ class ExplorerController(QObject):
         self.view.delete_selected_pv_cuts()
 
     def clear_panel_pv_diagram(self, panel):
+        """
+        Clear the PV diagram image and data from a specific bottom panel.
+        
+        Parameters
+        ----------
+        panel : dict
+            The dictionary configuration for the target panel.
+        """
         panel['current_data'] = None
         panel['pv_offset_axis'] = None
         panel['pv_velocity_axis'] = None
@@ -730,6 +886,14 @@ class ExplorerController(QObject):
         self.view.draw_contours(panel['id'], panel['view'], None)
 
     def update_panel_pv_diagram(self, panel):
+        """
+        Update a specific bottom panel with the rendered PV diagram for its selected cut.
+        
+        Parameters
+        ----------
+        panel : dict
+            The dictionary configuration for the target panel.
+        """
         self.view.configure_bottom_panel_axes(panel, is_pv=True)
         panel['view'].ui.histogram.gradient.loadPreset('turbo')
         panel['view'].ui.histogram.axis.setLabel(f"Flux ({self.view.display_unit})")
@@ -782,6 +946,16 @@ class ExplorerController(QObject):
         self.view.draw_contours(panel['id'], panel['view'], None)
 
     def change_spatial_tool(self, tool, auto_draw=True):
+        """
+        Switch the active spatial extraction tool (e.g., Point, Line, Rectangle) in the UI.
+        
+        Parameters
+        ----------
+        tool : str
+            The name of the selected tool.
+        auto_draw : bool, optional
+            Whether to automatically instantiate a default ROI in the channel map, by default True.
+        """
         if self.view.cube_clean is None: return
         
         if tool == "None":
@@ -846,6 +1020,16 @@ class ExplorerController(QObject):
             self.view.select_spatial_region(new_roi)
 
     def add_spatial_region(self, roi, tool):
+        """
+        Register a new spatial ROI (Region of Interest) into the internal state tracking list.
+        
+        Parameters
+        ----------
+        roi : pyqtgraph.ROI
+            The new region item added to the plot.
+        tool : str
+            The type of spatial region (e.g., 'Ellipse', 'Line').
+        """
         e_count = sum(1 for item in self.view.spatial_rois if item.get("tool") == "Ellipse")
         r_count = sum(1 for item in self.view.spatial_rois if item.get("tool") == "Rectangle")
         l_count = sum(1 for item in self.view.spatial_rois if item.get("tool") == "Line")
@@ -881,6 +1065,7 @@ class ExplorerController(QObject):
             self.view.plot_channel.addItem(text_item)
 
             def update_spatial_label(r=roi, t=text_item):
+                """Reposition the label text item attached to a spatial region when it moves."""
                 try:
                     pos = r.pos()
                     size = r.size()
@@ -905,6 +1090,7 @@ class ExplorerController(QObject):
             self.view.plot_channel.addItem(direction_item)
 
             def update_spatial_arrow(r=roi, a=direction_item):
+                """Update the directional arrow graphic attached to a Line ROI when it is modified."""
                 points = self.view.get_line_roi_points(r)
                 if points is None:
                     a.setData([], [])
@@ -943,6 +1129,23 @@ class ExplorerController(QObject):
         self.view.update_spatial_analysis()
 
     def line_roi_hit_test(self, roi, scene_pos, tolerance=10.0):
+        """
+        Determine if a mouse click interacts with a Line ROI item on the channel map.
+        
+        Parameters
+        ----------
+        roi : pyqtgraph.ROI
+            The target region of interest to check.
+        scene_pos : QPointF
+            The scene coordinates of the mouse click.
+        tolerance : float, optional
+            The maximum pixel distance from the line to consider a hit, by default 10.0.
+            
+        Returns
+        -------
+        bool
+            True if the click was within the tolerance distance of the line segments.
+        """
         pts = roi.getSceneHandlePositions()
         if len(pts) < 2:
             return False
@@ -962,15 +1165,32 @@ class ExplorerController(QObject):
         return False
 
     def on_spatial_region_selected(self, name):
+        """
+        Handle a change in the active spatial region dropdown menu selection.
+        
+        Parameters
+        ----------
+        name : str
+            The display name of the newly selected spatial region.
+        """
         for item in self.view.spatial_rois:
             if item["name"] == name:
                 self.view.select_spatial_region(item["roi"])
                 break
 
     def delete_selected_spatial_via_button(self):
+        """Delete the currently selected spatial region, triggered via UI button press."""
         self.view.delete_selected_spatial_regions()
 
     def select_spatial_region(self, roi):
+        """
+        Set a spatial ROI as the actively selected one, highlighting it and updating dropdowns.
+        
+        Parameters
+        ----------
+        roi : pyqtgraph.ROI
+            The target region item to select.
+        """
         self.view.spatial_rois_to_delete = [roi]
         for item in self.view.spatial_rois:
             if item["roi"] == roi:
@@ -989,6 +1209,7 @@ class ExplorerController(QObject):
         self.view.update_spatial_analysis()
 
     def delete_selected_spatial_regions(self):
+        """Remove all currently selected spatial ROIs from the internal state and the plots."""
         for roi in list(self.view.spatial_rois_to_delete):
             for item in self.view.spatial_rois:
                 if item["roi"] == roi:
@@ -1072,6 +1293,14 @@ class ExplorerController(QObject):
         self.view.update_spatial_analysis()
 
     def add_pv_cut(self, roi):
+        """
+        Register a newly drawn PV Cut (Line ROI) and set up its visual annotations.
+        
+        Parameters
+        ----------
+        roi : pyqtgraph.ROI
+            The PV Cut region item.
+        """
         name = f"Cut {len(self.view.pv_cuts) + 1}"
         cut_info = {"name": name, "roi": roi, "width": 1}
         self.view.pv_cuts.append(cut_info)
@@ -1095,6 +1324,7 @@ class ExplorerController(QObject):
         self.view.plot_channel.addItem(width_item)
 
         def update_annotations(r=roi, t=text_item, a=direction_item, w_item=width_item, c_info=cut_info):
+            """Reposition the labels, arrow, and width polygon for a PV Cut when it moves."""
             points = self.view.get_line_roi_points(r)
             if points is None:
                 return
@@ -1162,10 +1392,19 @@ class ExplorerController(QObject):
         self.view.update_moment_maps()
 
     def on_pv_cut_selected(self, name):
+        """
+        Handle selection of a PV Cut from the global PV cut dropdown.
+        
+        Parameters
+        ----------
+        name : str
+            The name of the PV Cut.
+        """
         self.view.set_selected_pv_cut(name)
         self.view.update_moment_maps()
 
     def open_edit_pv_cut_dialog(self):
+        """Launch the property editing dialog for the currently active PV Cut."""
         if not self.view.pv_cuts_to_delete:
             return
         selected_roi = self.view.pv_cuts_to_delete[-1]
@@ -1184,6 +1423,14 @@ class ExplorerController(QObject):
         dlg.show()
 
     def select_pv_cut(self, roi):
+        """
+        Select a specific PV Cut on the channel map, highlighting it and updating dropdowns.
+        
+        Parameters
+        ----------
+        roi : pyqtgraph.ROI
+            The target PV Cut region item.
+        """
         for item in self.view.pv_cuts:
             if item["roi"] == roi:
                 self.view.set_selected_pv_cut(item["name"])
@@ -1195,9 +1442,11 @@ class ExplorerController(QObject):
                 return
 
     def delete_selected_pv_via_button(self):
+        """Delete the currently selected PV Cut, triggered via UI button press."""
         self.view.delete_selected_pv_cuts()
 
     def delete_selected_pv_cuts(self):
+        """Remove all currently selected PV Cuts from the internal state and the plots."""
         for roi in list(self.view.pv_cuts_to_delete):
             if roi.scene():
                 roi.scene().removeItem(roi)
@@ -1256,10 +1505,24 @@ class ExplorerController(QObject):
         self.view.update_moment_maps()
 
     def clear_pv_cuts(self):
+        """Queue all PV cuts for deletion and execute the removal process."""
         self.view.pv_cuts_to_delete = [item["roi"] for item in self.view.pv_cuts]
         self.view.delete_selected_pv_cuts()
 
     def get_line_roi_points(self, roi):
+        """
+        Extract the start and end coordinates of a Line ROI in the data coordinate space.
+        
+        Parameters
+        ----------
+        roi : pyqtgraph.LineSegmentROI
+            The target Line ROI.
+            
+        Returns
+        -------
+        tuple of numpy.ndarray or None
+            A tuple containing the (start, end) point arrays, or None if invalid.
+        """
         pts = roi.getSceneHandlePositions()
         if len(pts) < 2:
             return None
@@ -1268,6 +1531,18 @@ class ExplorerController(QObject):
         return np.array([p1.x(), p1.y()], dtype=float), np.array([p2.x(), p2.y()], dtype=float)
 
     def change_roi(self, roi_type, cx=None, cy=None):
+        """
+        Create and place a new spectral extraction ROI on the channel map.
+        
+        Parameters
+        ----------
+        roi_type : str
+            The shape of the ROI (e.g., 'Point (Beam)', 'Ellipse').
+        cx : float, optional
+            The initial X coordinate for placement, by default auto-calculated.
+        cy : float, optional
+            The initial Y coordinate for placement, by default auto-calculated.
+        """
         if self.view.cube_clean is None: return
         
         if roi_type == "Whole Map":
@@ -1370,6 +1645,16 @@ class ExplorerController(QObject):
             self.view._finish_roi_addition(new_roi, roi_type)
 
     def _finish_roi_addition(self, new_roi, roi_type):
+        """
+        Finalize the registration of a new spectral extraction ROI and bind its callbacks.
+        
+        Parameters
+        ----------
+        new_roi : pyqtgraph.ROI
+            The newly created ROI item.
+        roi_type : str
+            The string identifier of the ROI shape.
+        """
         col = self.view.region_colors[len(self.view.spectrum_spatial_rois) % len(self.view.region_colors)]
         new_roi.setPen(pg.mkPen(col, width=3))
         self.view.view_channel.addItem(new_roi)
@@ -1394,6 +1679,7 @@ class ExplorerController(QObject):
         self.view.view_channel.addItem(text_item)
         
         def update_spectrum_region_label(r=new_roi, t=text_item):
+            """Reposition the label text item attached to a spectral region when it moves."""
             try:
                 br = r.boundingRect()
                 pos = r.pos()
@@ -1422,6 +1708,14 @@ class ExplorerController(QObject):
         self.view.update_spectrum()
         
     def add_spectrum_region(self, roi):
+        """
+        Register a 1D spectral range selector box on the spectrum plot.
+        
+        Parameters
+        ----------
+        roi : pyqtgraph.LinearRegionROI
+            The region object to add to the plot.
+        """
         active_rois = self.view.get_active_spectrum_rois()
         region_name = f"Box {len(active_rois) + 1}"
         roi_info = {"name": region_name, "roi": roi}
@@ -1433,6 +1727,7 @@ class ExplorerController(QObject):
         self.view.get_active_spectrum_plot().addItem(text_item)
         
         def update_text_pos(r=roi, t=text_item):
+            """Reposition the text label for a 1D spectral selection box when its bounds change."""
             try:
                 if hasattr(r, 'getData'):
                     x_data, _ = r.getData()
@@ -1462,6 +1757,14 @@ class ExplorerController(QObject):
         self.view.on_region_selected()
 
     def remove_spatial_spectrum_roi(self, roi):
+        """
+        Delete a spatial spectral-extraction ROI, clearing its graphics, checkboxes, and associated spectra.
+        
+        Parameters
+        ----------
+        roi : pyqtgraph.ROI
+            The region item to remove.
+        """
         for i, r_dict in enumerate(self.view.spectrum_spatial_rois):
             if r_dict["roi"] == roi:
                 # Remove from view
@@ -1517,6 +1820,7 @@ class ExplorerController(QObject):
         self.view.update_spectrum()
 
     def clear_roi(self):
+        """Clear all active spatial extraction regions, both for analysis and spectra generation."""
         self.view.delete_nr_roi()
         if hasattr(self.view, 'combo_roi'):
             self.view.combo_roi.blockSignals(True)
@@ -1533,6 +1837,7 @@ class ExplorerController(QObject):
     # --- DYNAMIC LINE CATALOG ENGINE ---
 
     def update_nr_rms(self):
+        """Calculate and store the background RMS noise level based on the selected Noise Region ROI."""
         if getattr(self.view, 'nr_roi', None) is None:
             return
         ch_idx = self.view.slider_channel.value()
@@ -1583,9 +1888,18 @@ class ExplorerController(QObject):
                 self.view.update_moment_maps()
 
     def update_pv_diagram(self, _=None):
+        """Trigger an update of the PV diagram across all panels (alias for update_moment_maps)."""
         self.view.update_moment_maps()
 
     def update_wcs_mode(self, is_absolute):
+        """
+        Switch the channel map coordinate axes between relative offset and absolute WCS celestial coordinates.
+        
+        Parameters
+        ----------
+        is_absolute : bool
+            True if axes should display absolute RA/Dec, False for arcsecond offsets.
+        """
         self.view.is_absolute_wcs = is_absolute
         x_label = 'Right Ascension (J2000)' if is_absolute else 'RA offset (arcsec)'
         y_label = 'Declination (J2000)' if is_absolute else 'Dec offset (arcsec)'
@@ -1598,6 +1912,16 @@ class ExplorerController(QObject):
             self.view.configure_bottom_panel_axes(panel, panel['combo'].currentText() == "PV Diagram")
 
     def draw_selected_lines(self, selected_rows, v_sys):
+        """
+        Plot vertical line markers and text labels for selected spectral lines from a catalog.
+        
+        Parameters
+        ----------
+        selected_rows : list of dict
+            A list of dictionary rows representing lines (from Splatalogue/astroquery).
+        v_sys : float
+            The systemic velocity offset to apply to the rest frequency, in km/s.
+        """
         c_kms = const.c.to(u.km / u.s).value
         ref_freq_ghz = self.view.rest_freq_hz / 1e9
 
@@ -1623,6 +1947,9 @@ class ExplorerController(QObject):
         self.view.parent_window.statusBar().showMessage(f"Overlaid {drawn_count} selected molecular lines.")
 
     def draw_overlay_contours(self):
+        """
+        Process and render all active 2D contour image overlays on top of the channel map.
+        """
         self.view._clear_overlay_contours()
         if not self.view.contour_overlays or self.view.cube_clean is None:
             return
@@ -1678,6 +2005,18 @@ class ExplorerController(QObject):
                 overlay_dict['iso_items'].append(iso)
 
     def draw_contours(self, target_id, view, data):
+        """
+        Render self-contours (iso-curves derived from the currently displayed data) on a specific panel.
+        
+        Parameters
+        ----------
+        target_id : str or int
+            The identifier of the panel ('channel' or a bottom panel index).
+        view : pyqtgraph.ImageView
+            The plot view where the contours will be drawn.
+        data : numpy.ndarray
+            The 2D image data from which to extract contour levels.
+        """
         for iso in self.view.active_contours.get(target_id, []):
             iso.setParentItem(None)
             if iso.scene() is not None:
@@ -1722,6 +2061,9 @@ class ExplorerController(QObject):
             self.view.active_contours[target_id].append(iso)
 
     def update_channel_map(self):
+        """
+        Update the main channel map view to display the data slice corresponding to the current velocity slider value.
+        """
         if self.view.cube_clean is None: return
         idx = self.view.slider_channel.value()
         self.view.input_channel_vel.setText(f"{self.view.v_axis[idx]:.2f}")
@@ -1845,6 +2187,7 @@ class ExplorerController(QObject):
                 new_v_sorted = self.view.v_axis[sort_idx]
                 
                 def map_val(val):
+                    """Interpolate a value from the old velocity axis to the new velocity axis."""
                     channel_interp = np.interp(val, old_v_sorted, np.arange(len(old_v_sorted)))
                     return float(np.interp(channel_interp, np.arange(len(new_v_sorted)), new_v_sorted))
                     
@@ -1895,6 +2238,10 @@ class ExplorerController(QObject):
             print(f"Error updating spectral axis: {e}")
 
     def update_spectrum(self):
+        """
+        Extract, calculate, and plot 1D spectra for all active spatial ROIs based on the current UI settings.
+        Handles unit conversions (Jy/beam, K, Jy) and statistic calculations (Mean, Median, Sum, Max).
+        """
         if self.view.cube_clean is None or getattr(self.view, 'is_2d_image', False): return
         stat = self.view.combo_spec_stat.currentText()
         
@@ -2224,6 +2571,7 @@ class ExplorerController(QObject):
             self.view._run_spectral_stats_calc(self.view._spectral_stats_popup)
 
     def update_text_from_region(self):
+        """Sync the spectral bounds text inputs with the physical bounds of the active 1D selection region."""
         if self.view.cube_clean is None: return
         minX, maxX = self.view.region.getRegion()
         
@@ -2243,6 +2591,7 @@ class ExplorerController(QObject):
         self.view.input_vmax.setCursorPosition(0)
 
     def update_region_from_text(self):
+        """Update the physical bounds of the active 1D selection region based on the text inputs."""
         if self.view.cube_clean is None: return
         try:
             minX, maxX = float(self.view.input_vmin.text()), float(self.view.input_vmax.text())
@@ -2250,6 +2599,16 @@ class ExplorerController(QObject):
         except ValueError: pass 
 
     def update_beam_visualizers(self, panel_type, panel_id=None):
+        """
+        Draw or update the synthesized beam ellipses (base cube and overlays) in the corner of a panel.
+        
+        Parameters
+        ----------
+        panel_type : str
+            Type of panel ('channel' or 'moment').
+        panel_id : int, optional
+            The index of the bottom panel if panel_type is 'moment'.
+        """
         if self.view.cube_clean is None:
             return
 
@@ -2274,6 +2633,7 @@ class ExplorerController(QObject):
         beams_to_draw = []
         
         def get_beam_for_cube(bmaj_arr, bmin_arr, bpa_arr, bmaj_s, bmin_s, bpa_s):
+            """Retrieve the correct beam parameters (BMAJ, BMIN, BPA) based on the panel type and velocity slice."""
             if bmaj_arr is not None and bmin_arr is not None:
                 if panel_type == 'channel':
                     idx = self.view.slider_channel.value()
@@ -2365,6 +2725,16 @@ class ExplorerController(QObject):
         self.view.update_beam_positions(target_plot.vb)
 
     def update_beam_positions(self, view_box, view_range=None):
+        """
+        Keep the synthesized beam visualizers anchored to the bottom-left corner during panning/zooming.
+        
+        Parameters
+        ----------
+        view_box : pyqtgraph.ViewBox
+            The ViewBox containing the beam graphics.
+        view_range : list, optional
+            Current view range, passed by pyqtgraph signals.
+        """
         if not hasattr(self.view, 'beam_visualizer_items'): return
         
         target_key = None
@@ -2404,6 +2774,7 @@ class ExplorerController(QObject):
 
 
     def update_region_ui_visibility(self):
+        """Toggle the visibility of spectral statistics UI elements based on active 1D regions."""
         active_rois = self.view.get_active_spectrum_rois()
         has_boxes = len(active_rois) >= 1
         self.view.btn_spectral_stats.setVisible(has_boxes)
@@ -2412,6 +2783,16 @@ class ExplorerController(QObject):
             self.view.refresh_spectral_stats_popup()
 
     def apply_cmap(self, view, is_velocity):
+        """
+        Apply a colormap to a specific view, defaulting to a diverging map for velocity fields.
+        
+        Parameters
+        ----------
+        view : pyqtgraph.ImageView
+            The target view to apply the colormap to.
+        is_velocity : bool
+            True if the data is a velocity field (moment 1), applying a blue-white-red map.
+        """
         if is_velocity:
             pos = np.array([0.0, 0.5, 1.0])
             colors = np.array([[0, 0, 255, 255], [255, 255, 255, 255], [255, 0, 0, 255]], dtype=np.ubyte)
@@ -2429,6 +2810,16 @@ class ExplorerController(QObject):
                     t.hide()
 
     def configure_bottom_panel_controls(self, panel, mode):
+        """
+        Toggle the UI controls (sliders, combo boxes) of a bottom panel based on its active mode.
+        
+        Parameters
+        ----------
+        panel : dict
+            The panel dictionary object.
+        mode : str
+            The active mode of the panel (e.g., 'PV Diagram', 'Moment 0').
+        """
         is_pv = mode == "PV Diagram"
         panel['aux_stack'].setCurrentWidget(panel['pv_controls_widget'] if is_pv else panel['thresh_widget'])
         if is_pv:
@@ -2445,6 +2836,16 @@ class ExplorerController(QObject):
             panel['aux_stack'].setVisible(True)
 
     def configure_bottom_panel_axes(self, panel, is_pv):
+        """
+        Setup axis labels and orientation (e.g., offset vs absolute WCS) for a bottom panel.
+        
+        Parameters
+        ----------
+        panel : dict
+            The panel dictionary object.
+        is_pv : bool
+            True if the panel is currently rendering a PV Diagram.
+        """
         plot_item = panel['plot_item']
         plot_item.invertX(not is_pv)
         plot_item.invertY(False)
@@ -2469,6 +2870,22 @@ class ExplorerController(QObject):
                 left_axis.update_wcs(self.view.wcs_2d, self.view.nx, self.view.ny, self.view.pix_scale_arcsec, self.view.parent_window.is_absolute_wcs)
 
     def _update_overlay_spatial_curve(self, plot_num, ov_name, x, y, color):
+        """
+        Update the 1D spatial profile curves corresponding to contour overlays on the spatial analysis plots.
+        
+        Parameters
+        ----------
+        plot_num : int
+            The target spatial plot (1 for X-profile, 2 for Y-profile).
+        ov_name : str
+            The name of the overlay.
+        x : array-like
+            The spatial coordinates along the profile.
+        y : array-like
+            The extracted profile values.
+        color : str or QColor
+            The color to render the curve.
+        """
         x = np.asarray(x, dtype=float).ravel()
         y = np.asarray(y, dtype=float).ravel()
         if len(x) != len(y) or len(x) == 0:
@@ -2485,6 +2902,14 @@ class ExplorerController(QObject):
         curves[ov_name].setData(x, y)
 
     def _update_contour_options_rms_for(self, overlay_dict):
+        """
+        Estimate the background RMS of an overlay dataset to initialize default contour levels.
+        
+        Parameters
+        ----------
+        overlay_dict : dict
+            The configuration dictionary for a specific contour overlay.
+        """
         slice_data = self.view._get_overlay_slice_for_channel(overlay_dict)
         if slice_data is None:
             return
@@ -2501,6 +2926,7 @@ class ExplorerController(QObject):
         overlay_dict['options']['multipliers_str'] = '3, 5, 10, 20, 40'
 
     def _update_spectrum_state_machine(self):
+        """Constrain available spectral units (Jy, K, etc.) based on the selected statistic (Sum, Mean, Max)."""
         stat = self.view.combo_spec_stat.currentText()
         if stat == "Flux Density":
             for i in range(self.view.combo_spec_unit.count()):
@@ -2522,6 +2948,7 @@ class ExplorerController(QObject):
                 self.view.combo_spec_unit.setCurrentIndex(0) # Auto-switch to Native
 
     def _cleanup_stale_overlay_spatial_curves(self, active_names):
+        """Remove overlay spatial profile curves that are no longer active or visible."""
         for pnum in [1, 2]:
             attr = f'overlay_spatial_curves_{pnum}'
             if not hasattr(self.view, attr):
@@ -2538,6 +2965,7 @@ class ExplorerController(QObject):
                     c.setData([], [])
 
     def _cleanup_stale_overlay_spatial_curves_plot1(self, active_names):
+        """Cleanup overlay spatial curves specifically for the first spatial plot."""
         self.view._cleanup_stale_overlay_spatial_curves(active_names)
         curves = getattr(self.view, 'overlay_spatial_curves_2', {})
         for curve_name in list(curves.keys()):
@@ -2549,6 +2977,7 @@ class ExplorerController(QObject):
             c.setData([], [])
 
     def _clear_all_overlay_spatial_curves(self):
+        """Remove all spatial overlay profile curves from both spatial plots."""
         for pnum in [1, 2]:
             attr = f'overlay_spatial_curves_{pnum}'
             plot = self.view.plot_spatial_1 if pnum == 1 else self.view.plot_spatial_2
@@ -2562,6 +2991,7 @@ class ExplorerController(QObject):
                 setattr(self.view, attr, {})
 
     def _clear_spatial_stats_panels(self):
+        """Clear the spatial statistics information panels from the UI layout."""
         while self.view.spatial_stats_layout.count():
             item = self.view.spatial_stats_layout.takeAt(0)
             w = item.widget()
@@ -2572,6 +3002,14 @@ class ExplorerController(QObject):
 
 
     def _clear_overlay_contours(self, overlay_dict=None):
+        """
+        Remove contour items corresponding to overlays from the channel map view.
+        
+        Parameters
+        ----------
+        overlay_dict : dict, optional
+            A specific overlay to clear. If None, clears all overlays.
+        """
         if overlay_dict is None:
             for ov in self.view.contour_overlays:
                 self.view._clear_overlay_contours(ov)
@@ -2583,6 +3021,7 @@ class ExplorerController(QObject):
         overlay_dict['iso_items'] = []
 
     def _cleanup_removed_overlay_curves(self):
+        """Clean up 1D spectral curves corresponding to deleted or deactivated overlays."""
         active_names = set()
         for ov in self.view.contour_overlays:
             if not ov['is_static'] and ov['v_axis'] is not None:
@@ -2603,6 +3042,7 @@ class ExplorerController(QObject):
                     self.view.plot_widget_smooth.removeItem(c)
 
     def _clear_all_overlay_spectrum_curves(self):
+        """Remove all 1D spectral overlay curves from both the raw and smoothed plot widgets."""
         for name in list(self.view.overlay_spectrum_curves.keys()):
             c = self.view.overlay_spectrum_curves.pop(name)
             if c.scene():
@@ -2617,6 +3057,7 @@ class ExplorerController(QObject):
                 self.view.plot_widget_smooth.removeItem(c)
 
     def refresh_spectral_stats_popup(self):
+        """Rebuild the checkboxes and UI elements in the Spectral Statistics popup dialog."""
         popup = self.view._spectral_stats_popup
         if popup is None: return
 
@@ -2655,6 +3096,14 @@ class ExplorerController(QObject):
             self.view.refresh_spectral_stats_popup()
 
     def _refresh_spatial_legend(self, plot_num):
+        """
+        Update the legend of a specific spatial plot to match the currently drawn overlay profiles.
+        
+        Parameters
+        ----------
+        plot_num : int
+            The spatial plot index (1 or 2).
+        """
         plot = self.view.plot_spatial_1 if plot_num == 1 else self.view.plot_spatial_2
         if not hasattr(plot, 'plotItem') or plot.plotItem.legend is None:
             return

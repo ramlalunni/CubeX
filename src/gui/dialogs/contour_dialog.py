@@ -1,3 +1,10 @@
+"""
+Module containing the dialog for configuring contour overlays.
+
+This dialog allows users to specify contour level modes (RMS, Linear, Log,
+Percentage), visual styling (color, width, style), and smoothing parameters 
+for individual panel overlays.
+"""
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel, 
                              QPushButton, QLineEdit, QComboBox, QDoubleSpinBox, 
@@ -10,9 +17,37 @@ import pyqtgraph as pg
 import matplotlib.pyplot as plt
 
 class ContourDialog(QDialog):
+    """
+    Dialog window for configuring and applying contour overlays on 2D panels.
+
+    Attributes
+    ----------
+    target_tab : ExplorerView or None
+        The parent explorer tab where the contours will be drawn.
+    target_id : int or str or None
+        The identifier of the panel ('channel' or integer 0-2) receiving the contours.
+    action : str
+        The final action taken by the user ('apply', 'clear', or 'cancel').
+    """
     _LINE_STYLES = {'Solid': Qt.SolidLine, 'Dashed': Qt.DashLine, 'Dotted': Qt.DotLine}
 
     def __init__(self, parent, current_params, title, target_tab=None, target_id=None):
+        """
+        Initialize the ContourDialog.
+
+        Parameters
+        ----------
+        parent : PyQt5.QtWidgets.QWidget
+            The parent widget.
+        current_params : dict or None
+            Existing contour configuration parameters to pre-populate the UI.
+        title : str
+            The window title.
+        target_tab : ExplorerView, optional
+            The explorer tab containing the target panel, by default None.
+        target_id : int or str, optional
+            The identifier for the specific panel to update, by default None.
+        """
         super().__init__(parent)
         self.setWindowTitle(title)
         self.setMinimumWidth(500)
@@ -251,6 +286,9 @@ class ContourDialog(QDialog):
         self.rad_pct.toggled.connect(lambda: self.stack.setCurrentIndex(3))
 
     def _on_apply(self):
+        """
+        Gather settings from the UI and apply the contour configuration to the target panel.
+        """
         opts = {}
         if self.rad_rms.isChecked():
             opts['mode'] = 'rms'
@@ -286,15 +324,12 @@ class ContourDialog(QDialog):
                 self.target_tab.update_moment_maps()
 
     def _on_clear(self):
+        """
+        Remove contour configurations and clear them from the target panel.
+        """
         if self.target_tab is not None and self.target_id is not None:
             self.target_tab.contour_params[self.target_id] = None
             if self.target_id == 'channel':
                 self.target_tab.update_channel_map()
             else:
                 self.target_tab.update_moment_maps()
-
-# ==============================================================================
-# REGION PROPERTIES DIALOG
-# ==============================================================================
-import pyqtgraph as pg
-

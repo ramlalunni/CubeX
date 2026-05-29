@@ -1,3 +1,6 @@
+"""
+Module defining the main application window and high-level dialogs for CubeX.
+"""
 import sys
 import csv
 import numpy as np
@@ -12,7 +15,33 @@ from PyQt5.QtWidgets import (QApplication, QMainWindow, QAction, QTabWidget,
                              QVBoxLayout, QHBoxLayout, QTextEdit, QCheckBox, QPushButton, QLabel)
 
 class ExportRegionsDialog(QDialog):
+    """
+    Dialog window for selecting which regions to export.
+
+    Attributes
+    ----------
+    checkboxes : dict
+        Mapping of region names to their corresponding QCheckBox widgets.
+    single_file_cb : PyQt5.QtWidgets.QCheckBox or None
+        Checkbox for selecting single-file overlay export (PDF only).
+    include_title_cb : PyQt5.QtWidgets.QCheckBox or None
+        Checkbox for including plot titles in the export (PDF only).
+    """
     def __init__(self, parent, regions_dict, title, is_pdf=False):
+        """
+        Initialize the ExportRegionsDialog.
+
+        Parameters
+        ----------
+        parent : PyQt5.QtWidgets.QWidget
+            The parent widget.
+        regions_dict : dict
+            Dictionary mapping region names to their PlotDataItem curves.
+        title : str
+            The window title for the dialog.
+        is_pdf : bool, optional
+            Whether the export format is PDF, by default False.
+        """
         super().__init__(parent)
         self.setWindowTitle(title)
         self.layout = QVBoxLayout(self)
@@ -48,12 +77,36 @@ class ExportRegionsDialog(QDialog):
         self.layout.addLayout(btn_layout)
         
     def get_selected_regions(self):
+        """
+        Retrieve the names of all regions that the user has selected.
+
+        Returns
+        -------
+        list of str
+            List of selected region names.
+        """
         return [name for name, cb in self.checkboxes.items() if cb.isChecked()]
         
     def is_single_file(self):
+        """
+        Check if the user requested a single overlaid file.
+
+        Returns
+        -------
+        bool
+            True if single file export is checked, False otherwise.
+        """
         return self.single_file_cb.isChecked() if self.single_file_cb else False
         
     def is_include_title(self):
+        """
+        Check if the user requested to include plot titles in the export.
+
+        Returns
+        -------
+        bool
+            True if titles should be included, False otherwise.
+        """
         return self.include_title_cb.isChecked() if self.include_title_cb else True
 
 # Import the tab environment we built
@@ -66,7 +119,32 @@ from src.gui.controllers.main_controller import MainController
 # MAIN WINDOW APP
 # ==============================================================================
 class KinematicExplorerApp(QMainWindow):
+    """
+    The main application window for CubeX.
+
+    This class sets up the main Qt window, the tabbed interface for multiple
+    open files, the global menu bar, and orchestrates the creation of new 
+    `ExplorerView` tabs.
+
+    Attributes
+    ----------
+    startup_width : int
+        The initial width of the main window in pixels.
+    startup_height : int
+        The initial height of the main window in pixels.
+    current_cmap : str
+        The global default colormap string.
+    is_absolute_wcs : bool
+        Global flag indicating if coordinates should display as absolute WCS.
+    controller : MainController
+        The high-level controller handling global actions.
+    tabs : PyQt5.QtWidgets.QTabWidget
+        The tab widget holding individual `ExplorerView` instances.
+    """
     def __init__(self):
+        """
+        Initialize the main application window and menu bar.
+        """
         super().__init__()
         self.setWindowTitle("CubeX")
         screen = QDesktopWidget().availableGeometry()
@@ -108,6 +186,7 @@ class KinematicExplorerApp(QMainWindow):
         self.add_new_tab() 
 
     def init_menu(self):
+        """Initialize the main application menu bar and connect actions to the controller."""
         menubar = self.menuBar()
         
         # --- File Menu ---
@@ -236,6 +315,14 @@ class KinematicExplorerApp(QMainWindow):
         help_menu.addAction(action_about)
 
     def keyPressEvent(self, event):
+        """
+        Handle global key presses for the main window (e.g., ESC to clear active regions).
+
+        Parameters
+        ----------
+        event : QKeyEvent
+            The key press event triggered by the user.
+        """
         if event.key() == Qt.Key_Escape:
             tab = self.get_active_tab()
             if tab and getattr(tab, 'roi_selected', False):
@@ -247,6 +334,9 @@ class KinematicExplorerApp(QMainWindow):
         super().keyPressEvent(event)
 
     def update_menu_states(self):
+        """
+        Enable or disable top-level menu items dynamically based on the current active tab's state.
+        """
         tab = self.get_active_tab()
         if tab:
             is_image = tab.last_clicked_panel_id != 'spectrum'
@@ -263,15 +353,34 @@ class KinematicExplorerApp(QMainWindow):
 
 
 
-    def get_active_tab(self): return self.tabs.currentWidget()
+    def get_active_tab(self): 
+        """
+        Retrieve the currently active workspace tab.
+
+        Returns
+        -------
+        ExplorerView or None
+            The currently visible tab widget.
+        """
+        return self.tabs.currentWidget()
 
     def add_new_tab(self):
+        """Instantiate and append a new, empty workspace tab to the tab bar."""
+        from src.gui.components.explorer_view import ExplorerView
         tab = ExplorerView(self)
         idx = self.tabs.addTab(tab, "Untitled")
         self.tabs.setCurrentIndex(idx)
         self.update_menu_states()
 
     def close_tab(self, index):
+        """
+        Close a workspace tab, or reset it if it is the only remaining tab.
+
+        Parameters
+        ----------
+        index : int
+            The index of the tab to close.
+        """
         if self.tabs.count() > 1:
             self.tabs.widget(index).deleteLater()
             self.tabs.removeTab(index)
@@ -282,22 +391,27 @@ class KinematicExplorerApp(QMainWindow):
         self.update_menu_states()
 
     def spawn_new_window(self):
+        """Open an entirely new, independent instance of the application window."""
         self.new_win = KinematicExplorerApp()
         self.new_win.show()
 
     def clear_roi(self):
+        """Delegate clearing the primary spatial ROI to the active tab."""
         tab = self.get_active_tab()
         if tab: tab.clear_roi()
 
     def clear_spectrum_regions(self):
+        """Delegate clearing all spectrum extraction boxes to the active tab."""
         tab = self.get_active_tab()
         if tab: tab.clear_spectrum_regions()
 
     def clear_pv_cuts(self):
+        """Delegate clearing all drawn PV cuts to the active tab."""
         tab = self.get_active_tab()
         if tab: tab.clear_pv_cuts()
 
     def show_manual(self):
+        """Display a popup dialog containing the user manual."""
         man = """
         <h3>CubeX User Manual</h3>
         <b>1. Loading Data:</b> Use File -> Open to load an ALMA FITS cube.<br><br>
@@ -311,6 +425,7 @@ class KinematicExplorerApp(QMainWindow):
         QMessageBox.information(self, "Manual", man)
 
     def show_shortcuts(self):
+        """Display a popup dialog containing application keyboard and mouse shortcuts."""
         sc = """
         <b>Mouse Controls:</b>
         <ul>
@@ -329,5 +444,6 @@ class KinematicExplorerApp(QMainWindow):
         QMessageBox.information(self, "Controls & Shortcuts", sc)
 
     def show_about(self):
+        """Display a popup dialog with app information and Numba installation status."""
         numba_status = "<span style='color: #2ecc71;'>Active</span>" if _NUMBA_AVAILABLE else "<span style='color: #e74c3c;'>Not Installed</span>"
         QMessageBox.about(self, "About CubeX", f"<b>CubeX</b><br>A lightweight, real-time ALMA data visualization tool.<br>Powered by PyQt5, PyQtGraph, Matplotlib, Astroquery, and Astropy.<br><br><b>Numba Acceleration:</b> {numba_status}")

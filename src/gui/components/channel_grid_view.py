@@ -1,3 +1,6 @@
+"""
+Module defining the ChannelGridView UI component.
+"""
 import pyqtgraph as pg
 from PyQt5.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QScrollArea, 
@@ -7,8 +10,35 @@ from PyQt5.QtCore import pyqtSignal
 
 class ChannelGridView(QDialog):
     """
-    Pure UI View for the Channel Grid.
-    Handles layout, theming, and user interaction signals.
+    Pure UI View for the Channel Grid window.
+
+    This class handles the layout, theming, and UI components for displaying 
+    a grid of spectral channel maps. It exposes user interactions as Qt signals 
+    to be connected to a controller.
+
+    Attributes
+    ----------
+    cmap_changed : PyQt5.QtCore.pyqtSignal
+        Signal emitted when the user selects a new colormap from the dropdown. 
+        Provides the colormap name as a string.
+    reset_zoom_clicked : PyQt5.QtCore.pyqtSignal
+        Signal emitted when the "Reset zoom" button is clicked.
+    export_pdf_clicked : PyQt5.QtCore.pyqtSignal
+        Signal emitted when the "Export to PDF" button is clicked.
+    scroll : PyQt5.QtWidgets.QScrollArea
+        The scroll area containing the graphics grid.
+    grid_widget : pyqtgraph.GraphicsLayoutWidget
+        The PyqtGraph layout used to hold individual channel images.
+    lbl_hover : PyQt5.QtWidgets.QLabel
+        Label used to display data coordinate information under the mouse cursor.
+    hist : pyqtgraph.HistogramLUTWidget
+        The PyqtGraph histogram widget used for interactive colormap scaling.
+    combo_cmap : PyQt5.QtWidgets.QComboBox
+        Dropdown menu for selecting colormaps.
+    btn_reset_zoom : PyQt5.QtWidgets.QPushButton
+        Button to reset the view limits of all plots.
+    btn_export : PyQt5.QtWidgets.QPushButton
+        Button to trigger PDF export of the channel grid.
     """
     # Expose user interactions as signals for the Controller
     cmap_changed = pyqtSignal(str)
@@ -16,6 +46,14 @@ class ChannelGridView(QDialog):
     export_pdf_clicked = pyqtSignal()
 
     def __init__(self, parent=None):
+        """
+        Initialize the ChannelGridView dialog and construct the layout.
+
+        Parameters
+        ----------
+        parent : PyQt5.QtWidgets.QWidget, optional
+            The parent widget, by default None.
+        """
         super().__init__(parent)
         self.setWindowTitle("Channel Grid")
         self.setMinimumSize(800, 600)

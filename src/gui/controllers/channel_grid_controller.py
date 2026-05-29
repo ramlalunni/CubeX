@@ -1,3 +1,9 @@
+"""
+Module containing the controller for the Channel Grid window.
+
+This controller handles the layout, image rendering, and PDF export logic 
+for the standalone multi-panel velocity channel grid viewer.
+"""
 import os
 import numpy as np
 import pyqtgraph as pg
@@ -7,9 +13,37 @@ from PyQt5.QtWidgets import QFileDialog, QCheckBox
 class ChannelGridController:
     """
     Controller for the Channel Grid window.
-    Handles generating the grid of images, updating histograms, and exporting to PDF.
+
+    This class handles the generation of a 2D image grid from spectral channel
+    slices, synchronizes colormaps and histograms with the main UI, and manages 
+    the PDF export routine for the grid layout.
+
+    Attributes
+    ----------
+    view : ChannelGridView
+        The UI component for the channel grid.
+    tab : ExplorerView
+        The parent explorer tab providing the data cube context.
+    images : list of pyqtgraph.ImageItem
+        List of ImageItem objects representing each channel map in the grid.
+    view_boxes : list of dict
+        List of dictionaries containing metadata and references for each ViewBox.
+    pos_tup : tuple or None
+        The (x, y) offset position tuple for rendering images in physical coordinates.
+    scale_tup : tuple or None
+        The (sx, sy) scale tuple for rendering images in physical coordinates.
     """
     def __init__(self, view, explorer_tab):
+        """
+        Initialize the ChannelGridController.
+
+        Parameters
+        ----------
+        view : ChannelGridView
+            The UI view component to be controlled.
+        explorer_tab : ExplorerView
+            The main explorer tab providing data and state.
+        """
         self.view = view
         self.tab = explorer_tab
         
@@ -31,6 +65,13 @@ class ChannelGridController:
         self.update_grid()
         
     def update_grid(self):
+        """
+        Regenerate the channel grid UI based on the current velocity subset.
+
+        Returns
+        -------
+        None
+        """
         # Clear existing grid
         self.view.grid_widget.clear()
         self.images.clear()
@@ -129,6 +170,18 @@ class ChannelGridController:
             pg.QtCore.QTimer.singleShot(100, self.reset_zoom)
                 
     def change_cmap(self, cmap_name):
+        """
+        Change the colormap of the grid histograms and images.
+
+        Parameters
+        ----------
+        cmap_name : str
+            The name of the colormap to apply.
+
+        Returns
+        -------
+        None
+        """
         cmap_name = cmap_name.lower()
         try:
             self.view.hist.gradient.loadPreset(cmap_name)
@@ -141,11 +194,30 @@ class ChannelGridController:
         self.on_hist_lut_changed()
 
     def reset_zoom(self):
+        """
+        Reset the zoom level of all channel ViewBoxes to fit the data bounds.
+
+        Returns
+        -------
+        None
+        """
         if self.view_boxes:
             vb = self.view_boxes[0]['vb']
             vb.autoRange(padding=0)
             
     def on_mouse_moved(self, pos):
+        """
+        Handle mouse movement over the channel grid to display pixel coordinates.
+
+        Parameters
+        ----------
+        pos : PyQt5.QtCore.QPointF
+            The position of the mouse event in scene coordinates.
+
+        Returns
+        -------
+        None
+        """
         if not self.view_boxes:
             return
             
@@ -179,25 +251,44 @@ class ChannelGridController:
         self.view.lbl_hover.setStyleSheet("font-family: monospace; font-size: 11.5px; color: #aaa; padding: 5px;")
                 
     def on_hist_levels_changed(self):
+        """
+        Sync image intensity levels when the global grid histogram is adjusted.
+        """
         levels = self.view.hist.getLevels()
         for img in self.images:
             img.setLevels(levels)
             
     def on_hist_lut_changed(self):
+        """
+        Sync the lookup table for all images when the colormap gradient changes.
+        """
         lut = self.view.hist.gradient.getLookupTable(256)
         for img in self.images:
             img.setLookupTable(lut)
             
     def update_from_main_hist(self):
+        """
+        Update local histogram levels from the main channel map view.
+        """
         main_hist = self.tab.view_channel.ui.histogram
         levels = main_hist.getLevels()
         self.view.hist.setLevels(levels[0], levels[1])
             
     def update_from_main_lut(self):
+        """
+        Update local colormap state from the main channel map view.
+        """
         main_hist = self.tab.view_channel.ui.histogram
         self.view.hist.gradient.restoreState(main_hist.gradient.saveState())
         
     def export_to_pdf(self):
+        """
+        Export the current channel grid visualization to a multi-panel PDF document.
+
+        Returns
+        -------
+        None
+        """
         parent_filename = "cube"
         if getattr(self.tab, 'current_file_name', None):
             parent_filename = os.path.basename(self.tab.current_file_name)

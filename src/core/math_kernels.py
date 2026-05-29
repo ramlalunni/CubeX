@@ -1,3 +1,9 @@
+"""
+Module providing high-performance mathematical kernels.
+
+Contains JIT-compiled Numba and vectorized NumPy functions for computationally
+heavy tasks like interpolation and spectral moment map generation.
+"""
 import numpy as np
 import warnings
 
@@ -20,7 +26,38 @@ except ImportError:
 if _NUMBA_AVAILABLE:
     @numba.njit(parallel=True, fastmath=True, cache=True)
     def _bilinear_interp_numba(cube, x0, y0, x1, y1, fx, fy, out):
-        """Fill out[nv, n_valid] via bilinear interpolation; no temporaries."""
+        """
+        Perform parallelized bilinear interpolation on a 3D data cube.
+
+        Parameters
+        ----------
+        cube : numpy.ndarray
+            The 3D data cube with shape (Nv, Nx, Ny).
+        x0 : numpy.ndarray
+            1D integer array of floor x-coordinates.
+        y0 : numpy.ndarray
+            1D integer array of floor y-coordinates.
+        x1 : numpy.ndarray
+            1D integer array of ceiling x-coordinates.
+        y1 : numpy.ndarray
+            1D integer array of ceiling y-coordinates.
+        fx : numpy.ndarray
+            1D float array of fractional weights in x.
+        fy : numpy.ndarray
+            1D float array of fractional weights in y.
+        out : numpy.ndarray
+            2D float array to store the interpolated output with shape (Nv, Npoints).
+
+        Returns
+        -------
+        None
+
+        Notes
+        -----
+        This function uses Numba JIT compilation for multi-core parallelism across 
+        the spectral axis (`Nv`). The spatial interpolation is a classic 4-point 
+        bilinear gather operation weighted by `fx` and `fy`.
+        """
         nv = cube.shape[0]
         n  = x0.shape[0]
         for v in numba.prange(nv):          # parallel over spectral channels
@@ -37,7 +74,38 @@ if _NUMBA_AVAILABLE:
                 )
 
 def _bilinear_interp_numpy(cube, x0, y0, x1, y1, fx, fy, out):
-    """Pure-NumPy fallback: same result as the Numba kernel."""
+    """
+    Perform bilinear interpolation on a 3D data cube using vectorized NumPy operations.
+
+    Parameters
+    ----------
+    cube : numpy.ndarray
+        The 3D data cube with shape (Nv, Nx, Ny).
+    x0 : numpy.ndarray
+        1D integer array of floor x-coordinates.
+    y0 : numpy.ndarray
+        1D integer array of floor y-coordinates.
+    x1 : numpy.ndarray
+        1D integer array of ceiling x-coordinates.
+    y1 : numpy.ndarray
+        1D integer array of ceiling y-coordinates.
+    fx : numpy.ndarray
+        1D float array of fractional weights in x.
+    fy : numpy.ndarray
+        1D float array of fractional weights in y.
+    out : numpy.ndarray
+        2D float array to store the interpolated output with shape (Nv, Npoints).
+
+    Returns
+    -------
+    None
+
+    Notes
+    -----
+    This is a pure-NumPy fallback for environments without Numba. It evaluates 
+    the bilinear interpolation formula across all spatial sample points simultaneously 
+    via advanced indexing and array broadcasting over the spectral axis.
+    """
     out[:] = (
         (1.0 - fx) * (1.0 - fy) * cube[:, x0, y0]
         + fx * (1.0 - fy) * cube[:, x1, y0]
@@ -77,10 +145,32 @@ if _NUMBA_AVAILABLE:
 if _NUMBA_AVAILABLE:
     @numba.njit(parallel=True, fastmath=True, cache=True)
     def _compute_moments_12_numba(mc, v_axis):
-        """Single-pass kernel: returns (m1_map, m2_map) each (Nx, Ny).
+        """
+        Compute Moment 1 (velocity) and Moment 2 (dispersion) in a single pass.
 
-        mc:     (Nv, Nx, Ny) float64 — NaN where below intensity threshold.
-        v_axis: (Nv,) float64        — velocity values in km/s.
+        Parameters
+        ----------
+        mc : numpy.ndarray
+            Masked 3D data cube (float64) of shape (Nv, Nx, Ny). NaN values signify 
+            voxels below the intensity threshold.
+        v_axis : numpy.ndarray
+            1D float array (float64) of velocity values in km/s of length Nv.
+
+        Returns
+        -------
+        tuple of numpy.ndarray
+            A tuple containing:
+            - m1_out : 2D float array (Nx, Ny) of intensity-weighted velocities.
+            - m2_out : 2D float array (Nx, Ny) of intensity-weighted velocity dispersions.
+
+        Notes
+        -----
+        This Numba-accelerated kernel computes both moments simultaneously to minimize 
+        memory overhead and cache misses. The math relies on the standard definitions:
+        M1 = sum(I * v) / sum(I)
+        M2 = sqrt(sum(I * v^2) / sum(I) - M1^2)
+        Note that this naive single-pass variance calculation can suffer from 
+        catastrophic cancellation precision issues for narrow spectral lines.
         """
         nv, nx, ny = mc.shape
         m1_out = np.full((nx, ny), np.nan)
@@ -103,7 +193,30 @@ if _NUMBA_AVAILABLE:
         return m1_out, m2_out
 
 def _compute_moments_12_numpy(mc, v_axis):
-    """NumPy fallback using tensordot for BLAS-accelerated weighted sums."""
+    """
+    Compute Moment 1 and Moment 2 using vectorized NumPy tensor contractions.
+
+    Parameters
+    ----------
+    mc : numpy.ndarray
+        Masked 3D data cube of shape (Nv, Nx, Ny). NaN values represent masked voxels.
+    v_axis : numpy.ndarray
+        1D float array of velocity values in km/s.
+
+    Returns
+    -------
+    tuple of numpy.ndarray
+        A tuple containing:
+        - m1 : 2D float array (Nx, Ny) representing the Moment 1 map.
+        - m2 : 2D float array (Nx, Ny) representing the Moment 2 map.
+
+    Notes
+    -----
+    This pure-NumPy implementation utilizes BLAS-accelerated `numpy.tensordot` 
+    for fast weighted sum contractions along the spectral axis. The mathematical 
+    formulation is mathematically identical to the loop-based M1 and M2 definitions, 
+    but evaluates the full 3D array in a batched memory operation.
+    """
     mc_nz = np.where(np.isnan(mc), 0.0, mc)          # NaN→0, single pass
     with np.errstate(invalid='ignore', divide='ignore'):
         m0      = mc_nz.sum(axis=0)                   # sum(axis=0) uses SIMD/BLAS

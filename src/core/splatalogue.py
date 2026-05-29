@@ -1,10 +1,33 @@
+"""
+Module for querying and parsing molecular line data from the Splatalogue database.
+"""
 import re
 import astropy.units as u
 from PyQt5.QtCore import QThread, pyqtSignal
 
 def format_chemical_formula(formula_str):
     """
-    Converts raw database chemical formulas and HTML tags into proper Unicode sub/superscripts.
+    Format raw database chemical formulas and HTML tags into proper Unicode sub/superscripts.
+
+    Parameters
+    ----------
+    formula_str : str
+        The raw chemical formula string retrieved from the database.
+
+    Returns
+    -------
+    str
+        The formatted chemical formula string with Unicode sub/superscripts.
+
+    Raises
+    ------
+    None
+
+    Notes
+    -----
+    This function uses regular expressions and string translation maps to 
+    convert standard HTML tags (e.g., `<sub>`, `<sup>`) and inline numeric 
+    sequences into corresponding Unicode characters for improved GUI rendering.
     """
     if not isinstance(formula_str, str): 
         return formula_str
@@ -31,11 +54,54 @@ def format_chemical_formula(formula_str):
 class SplatalogueWorker(QThread):
     """
     Background worker thread to query the Splatalogue API without freezing the GUI.
+
+    Attributes
+    ----------
+    fmin : float
+        Minimum frequency for the search in GHz.
+    fmax : float
+        Maximum frequency for the search in GHz.
+    catalogs : tuple or list
+        List of catalog names to query.
+    v_sys : float
+        Systemic velocity in km/s.
+    e_max : float
+        Maximum upper state energy in Kelvin.
+    species : list of str
+        List of parsed species patterns to filter by.
+    finished : PyQt5.QtCore.pyqtSignal
+        Signal emitted when querying is successful. Provides a list of dictionaries.
+    error : PyQt5.QtCore.pyqtSignal
+        Signal emitted if an error occurs. Provides the error string.
+
+    Notes
+    -----
+    The Splatalogue query uses `astroquery` and downloads line lists over HTTP.
+    This thread performs heavy Pandas dataframe manipulation, filtering by upper
+    state energy, and species matching before emitting a deduplicated list.
     """
     finished = pyqtSignal(list)
     error = pyqtSignal(str)
 
     def __init__(self, fmin, fmax, catalogs, v_sys, e_max, species):
+        """
+        Initialize the Splatalogue API worker.
+
+        Parameters
+        ----------
+        fmin : float
+            Minimum frequency in GHz.
+        fmax : float
+            Maximum frequency in GHz.
+        catalogs : list of str
+            Catalog names.
+        v_sys : float
+            Systemic velocity in km/s.
+        e_max : float
+            Maximum upper state energy in K.
+        species : str
+            Comma-separated string of species to search for.
+        """
         super().__init__()
         self.fmin = fmin
         self.fmax = fmax
@@ -45,6 +111,18 @@ class SplatalogueWorker(QThread):
         self.species = [s.strip() for s in species.split(',') if s.strip()]
 
     def run(self):
+        """
+        Execute the astroquery Splatalogue search and process results.
+
+        Returns
+        -------
+        None
+
+        Raises
+        ------
+        Exception
+            Emits an error string via the `error` signal upon encountering an API or parsing issue.
+        """
         try:
             # Lazy imports so the app starts faster and errors are caught by the thread
             import pandas as pd

@@ -1,3 +1,10 @@
+"""
+Module containing the dialog for configuring 1D spectral smoothing.
+
+This dialog lets users select and parameterize different smoothing 
+filters (Boxcar, Gaussian, Savitzky-Golay) to be applied to the 
+active 1D spectrum plot.
+"""
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel, 
                              QPushButton, QLineEdit, QComboBox, QDoubleSpinBox, 
@@ -12,15 +19,35 @@ import matplotlib.pyplot as plt
 class SpectralSmoothingDialog(QDialog):
     """
     Dialog to select spectral smoothing method and parameters.
+
+    Attributes
+    ----------
+    apply_clicked : PyQt5.QtCore.pyqtSignal
+        Signal emitted when the user clicks 'Apply', passing the smoothing parameters dict.
+    combo_method : PyQt5.QtWidgets.QComboBox
+        Dropdown menu to select the smoothing method.
+    param_stack : PyQt5.QtWidgets.QStackedWidget
+        Container holding the specific parameter inputs for the selected method.
     """
     apply_clicked = pyqtSignal(dict)
     def __init__(self, parent=None):
+        """
+        Initialize the SpectralSmoothingDialog.
+
+        Parameters
+        ----------
+        parent : PyQt5.QtWidgets.QWidget, optional
+            The parent widget, by default None.
+        """
         super().__init__(parent)
         self.setWindowTitle("Spectral Smoothing")
         self.setMinimumWidth(350)
         self.initUI()
         
     def initUI(self):
+        """
+        Build the UI elements for selecting smoothing methods and their parameters.
+        """
         layout = QVBoxLayout(self)
         
         method_layout = QHBoxLayout()
@@ -90,15 +117,35 @@ class SpectralSmoothingDialog(QDialog):
         layout.addLayout(btn_layout)
         
     def _on_apply(self):
+        """
+        Emit the `apply_clicked` signal with the current parameters when the Apply button is clicked.
+        """
         params = self.get_params()
         if params:
             self.apply_clicked.emit(params)
         
     def validate_savgol(self, value):
+        """
+        Ensure the Savitzky-Golay window size remains an odd number.
+
+        Parameters
+        ----------
+        value : int
+            The current value of the window size spinbox.
+        """
         if value % 2 == 0:
             self.spin_savgol_w.setValue(value + 1)
             
     def get_params(self):
+        """
+        Retrieve the currently selected smoothing method and its associated parameters.
+
+        Returns
+        -------
+        dict or None
+            A dictionary of parameters suitable for `spectral_smoothing` routines, 
+            or None if the method is unrecognized.
+        """
         method = self.combo_method.currentText()
         if method == "Boxcar":
             return {"method": "boxcar", "window": self.spin_boxcar_w.value()}
@@ -111,8 +158,3 @@ class SpectralSmoothingDialog(QDialog):
                 p = w - 1
             return {"method": "savgol", "window": w, "polyorder": p}
         return None
-
-
-# ==============================================================================
-# CHANNEL GRID DIALOG
-# ==============================================================================
