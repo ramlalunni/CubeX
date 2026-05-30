@@ -8,13 +8,11 @@
 [![GitHub issues](https://img.shields.io/github/issues/ramlalunni/CubeX.svg)](https://github.com/ramlalunni/CubeX/issues)
 
 ## Overview
-CubeX is a lightweight, real-time interferometric FITS cube visualization and kinematic exploration tool designed for mm/sub-mm/radio astronomers. Built on a modern Python scientific stack with `PyQt5` and `PyQtGraph`, it offers a fast, interactive interface for navigating complex spectral data cubes without the heavy computational overhead of traditional software packages.
-
-CubeX streamlines advanced interferometric data visualisation and analysis by providing dynamic, on-the-fly moment map and position-velocity (PV) diagram generation, along with standard spectral extraction, spatial analysis, and statistics tools, all alongside a fast image cube renderer. Users can seamlessly interact with and process large datasets, extract local spectra from custom spatial regions, and query molecular transitions from the CDMS and JPL databases directly within the CubeX UI.
+CubeX is a lightweight, real-time interferometric FITS cube visualization and kinematic exploration tool designed for mm/sub-mm/radio astronomers. Built on a modern Python scientific stack with `PyQt5` and `PyQtGraph`, it offers a fast, interactive interface for navigating complex spectral data cubes without the heavy computational overhead of traditional software packages. CubeX streamlines advanced interferometric data visualisation and analysis by providing dynamic, on-the-fly moment map and position-velocity (PV) diagram generation, along with standard spectral extraction, spatial analysis, and statistics tools, all alongside a fast image cube renderer. Users can seamlessly interact with and process large datasets, extract local spectra from custom spatial regions, and query molecular transitions from the CDMS and JPL databases directly within the CubeX UI.
 
 ## Installation
 
-Since CubeX is built completely in python, it can easily be installed with `pip` or `pipx` on any system, independent of the OS. CubeX is also available as a standalone packaged application for Linux and macOS. It can also be installed from source by cloning this github repository.
+Since CubeX is built completely in python, it can be easily installed with `pip` or `pipx` on any computer, independent of the operating system. CubeX is also available as a standalone packaged application for Linux and macOS. It can also be installed from source by cloning this github repository.
 > [!NOTE]
 > **The standalone macOS application will be provided soon. Currently only a Linux executable is available**.
 
@@ -26,7 +24,7 @@ You can install the latest release directly from GitHub:
 ```bash
 # Create and activate a virtual environment
 python3 -m venv [your-venv-name]
-source your-venv-name/bin/activate
+source [your-venv-name]/bin/activate
 
 # Install CubeX
 pip install git+https://github.com/ramlalunni/CubeX.git
@@ -54,7 +52,7 @@ For users who prefer not to manage Python environments or dependencies, we also 
 > - **macOS:** On your first launch, Apple's Gatekeeper may block the app. Simply right-click the app icon and select **"Open"** to bypass the warning.  
 > - **Linux:** Depending on your distribution, you may need to make the file executable before double-clicking. You can do this by right-clicking the file -> Properties -> Permissions -> "Allow executing file as program", or via terminal: `chmod +x CubeX-Linux`.
 
-### Option 3: Installation from source
+### Option 3: Build from source
 CubeX is designed for modern Python environments. It is highly recommended to use a virtual environment (`venv` or `conda`) for installation. If you prefer to run CubeX within your own `conda` or another `venv` environment, on Linux/MacOS systems:
 
 ```bash
