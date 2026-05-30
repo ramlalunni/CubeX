@@ -8,6 +8,8 @@ import os
 import numpy as np
 import pyqtgraph as pg
 from PyQt5.QtWidgets import QFileDialog, QMessageBox, QDialog, QApplication
+from PyQt5.QtGui import QDesktopServices
+from PyQt5.QtCore import QUrl
 from astropy.wcs import WCS
 
 class MainController:
@@ -581,4 +583,51 @@ class MainController:
                 tab.controller.update_wcs_mode(checked)
             elif hasattr(tab, 'update_wcs_mode'):
                 tab.update_wcs_mode(checked)
+
+    def _open_url_robust(self, url):
+        """Helper to open URLs robustly, prioritizing the host browser in WSL environments."""
+        import subprocess
+        import shutil
+        import webbrowser
+        import platform
+        
+        is_wsl = "microsoft" in platform.release().lower() or "wsl" in platform.release().lower()
+        if is_wsl and shutil.which("wslview"):
+            try:
+                subprocess.Popen(["wslview", url])
+                return
+            except Exception:
+                pass
+                
+        webbrowser.open(url)
+
+    def open_documentation(self):
+        """Open the official CubeX documentation in the default web browser."""
+        self._open_url_robust("https://cubex.readthedocs.io/en/latest/")
+
+    def open_source(self):
+        """Open the CubeX GitHub repository in the default web browser."""
+        self._open_url_robust("https://github.com/ramlalunni/CubeX")
+
+    def open_bug_report(self):
+        """Open the CubeX GitHub issues page in the default web browser."""
+        self._open_url_robust("https://github.com/ramlalunni/CubeX/issues")
+
+    def open_license(self):
+        """Open the GNU GPL v3 license text in the default web browser."""
+        self._open_url_robust("https://www.gnu.org/licenses/gpl-3.0.en.html#license-text")
+
+    def show_about(self):
+        """Display a standard About dialog with application information and credits."""
+        QMessageBox.about(self.view, "About", 
+            "<h3>CubeX</h3>"
+            "<p><b>Version: 0.4-preview</b></p>"
+            "<p>A lightweight, real-time interferometric image visualization and data cube exploration tool.</p>"
+            "<p><b>Author:</b> Ramlal Unnikrishnan<br>"
+            "<b>Contact Developer:</b> <a href='mailto:ramlalunni@gmail.com' style='color: #4da6ff;'>Email</a><br>"
+            "<b>Copyright:</b> &copy; 2026</p>"
+            "<p>Written completely in Python. Powered by:<br>"
+            "• PyQt5 & PyQtGraph for rendering<br>"
+            "• Astropy & Spectral-Cube for core math</p>"
+            "<p>Released under the GNU General Public License v3.0.</p>")
 

@@ -301,18 +301,26 @@ class KinematicExplorerApp(QMainWindow):
         # --- Help Menu ---
         help_menu = menubar.addMenu('Help')
         
-        action_manual = QAction('Manual', self)
-        action_manual.triggered.connect(self.show_manual)
-        help_menu.addAction(action_manual)
+        self.action_docs = QAction('View Documentation', self)
+        self.action_docs.triggered.connect(self.controller.open_documentation)
+        help_menu.addAction(self.action_docs)
 
-        action_shortcuts = QAction('Controls & Shortcuts', self)
-        action_shortcuts.triggered.connect(self.show_shortcuts)
-        help_menu.addAction(action_shortcuts)
+        self.action_source = QAction('View source code', self)
+        self.action_source.triggered.connect(self.controller.open_source)
+        help_menu.addAction(self.action_source)
+        
+        self.action_bug = QAction('Submit bug report / feature request', self)
+        self.action_bug.triggered.connect(self.controller.open_bug_report)
+        help_menu.addAction(self.action_bug)
+        
+        self.action_license = QAction('View License', self)
+        self.action_license.triggered.connect(self.controller.open_license)
+        help_menu.addAction(self.action_license)
 
         help_menu.addSeparator()
-        action_about = QAction('About CubeX', self)
-        action_about.triggered.connect(self.show_about)
-        help_menu.addAction(action_about)
+        self.action_about = QAction('About', self)
+        self.action_about.triggered.connect(self.controller.show_about)
+        help_menu.addAction(self.action_about)
 
     def keyPressEvent(self, event):
         """
@@ -410,40 +418,4 @@ class KinematicExplorerApp(QMainWindow):
         tab = self.get_active_tab()
         if tab: tab.clear_pv_cuts()
 
-    def show_manual(self):
-        """Display a popup dialog containing the user manual."""
-        man = """
-        <h3>CubeX User Manual</h3>
-        <b>1. Loading Data:</b> Use File -> Open to load an ALMA FITS cube.<br><br>
-        <b>2. Channel Map:</b> The top-left panel shows individual velocity slices. Use the media controls, slider, or type a velocity to navigate.<br><br>
-        <b>3. Extracting Spectra:</b> Select a shape from the 'Extraction Region' dropdown. Draw it on the channel map to see the local spectrum in the top-right panel. <b>Click the shape to select it (turns yellow), then press ESC to delete.</b><br><br>
-        <b>4. Building PV Diagrams:</b> Set any bottom-panel dropdown to PV Diagram, then hold CTRL and drag a line on the channel map. Use that panel's Cut selector to choose which slice to display, and the Range selector to switch between the selected spectrum range and the full cube. The default PV range is the selected spectrum range.<br><br>
-        <b>5. Line Catalog:</b> Select a velocity range in the Spectrum using the blue handles. Go to Tools -> Query Molecular Line Database to dynamically fetch species from Splatalogue and overlay them on the spectrum.<br><br>
-        <b>6. Generating Moments:</b> The bottom panels can show moment maps or PV diagrams. Moment products use the velocity range selected by the blue slider in the Spectrum plot.<br><br>
-        <b>7. Threshold Masking (Important!):</b> To clean up noise in your Velocity maps, click the Dropper icon on a moment panel, then click on the dark background in the raw Moment 0 map. This extracts that background noise level and applies it as a 3D cutoff mask!
-        """
-        QMessageBox.information(self, "Manual", man)
 
-    def show_shortcuts(self):
-        """Display a popup dialog containing application keyboard and mouse shortcuts."""
-        sc = """
-        <b>Mouse Controls:</b>
-        <ul>
-        <li><b>Left Click + Drag:</b> Pan around the maps.</li>
-        <li><b>Right Click + Drag:</b> Zoom in and out.</li>
-        <li><b>Middle Click (or 'A' key):</b> Auto-reset zoom.</li>
-        <li><b>Left Click on Spectrum:</b> Instantly jump the channel map to that velocity.</li>
-        <li><b>Left Click on Panel:</b> Sets the "Active View" (used for drawing Contours or PDF Export, highlighted in blue).</li>
-        <li><b>CTRL + Drag on Channel Map while any bottom panel is set to PV Diagram:</b> Draw a new PV cut.</li>
-        </ul>
-        <b>Keyboard Controls:</b>
-        <ul>
-        <li><b>ESC:</b> Deletes the currently selected spatial ROI or PV cut.</li>
-        </ul>
-        """
-        QMessageBox.information(self, "Controls & Shortcuts", sc)
-
-    def show_about(self):
-        """Display a popup dialog with app information and Numba installation status."""
-        numba_status = "<span style='color: #2ecc71;'>Active</span>" if _NUMBA_AVAILABLE else "<span style='color: #e74c3c;'>Not Installed</span>"
-        QMessageBox.about(self, "About CubeX", f"<b>CubeX</b><br>A lightweight, real-time ALMA data visualization tool.<br>Powered by PyQt5, PyQtGraph, Matplotlib, Astroquery, and Astropy.<br><br><b>Numba Acceleration:</b> {numba_status}")
