@@ -632,14 +632,15 @@ class ExplorerController(QObject):
             # Recover the centers from the stepMode edges (which exactly matches the UI's sorted v_axis)
             v_axis = (x_edges[:-1] + x_edges[1:]) / 2.0
 
-            # Hardcode physics to Radio Velocity for dx and peak location calculations
+            # Convert physics properly based on the current spectrum axis type
             try:
                 sort_idx = np.argsort(self.view.v_axis)
-                freq_q = self.view.freq_array[sort_idx] * u.Hz
-                rest_q = self.view.rest_freq_hz * u.Hz
-                radio_v_axis = freq_q.to(u.km / u.s, equivalencies=u.doppler_radio(rest_q)).value
+                freq_array_sorted = self.view.freq_array[sort_idx]
+                target_unit = "optical_velocity" if self.view.combo_axis_type.currentText() == "Optical Velocity" else "radio_velocity"
+                from cubex.core.math_kernels import convert_spectral_axis
+                converted_v_axis = convert_spectral_axis(freq_array_sorted, self.view.rest_freq_hz, target_unit)
             except Exception:
-                radio_v_axis = v_axis
+                converted_v_axis = v_axis
 
             # Build mask from selected 1D velocity boxes (using displayed axis for UI mapping)
             combined_mask = np.zeros_like(v_axis, dtype=bool)
@@ -661,7 +662,7 @@ class ExplorerController(QObject):
                 continue
 
             stats_lines = [f"<b style='color:#89b4fa'>{name}</b>"]
-            valid_v = radio_v_axis[combined_mask]
+            valid_v = converted_v_axis[combined_mask]
             dv = abs(valid_v[1] - valid_v[0]) if len(valid_v) > 1 else 1.0
 
             for calc in calc_types:
