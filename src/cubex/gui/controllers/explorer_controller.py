@@ -2115,12 +2115,18 @@ class ExplorerController(QObject):
         old_vline_pos = None
         old_region_bounds = None
         old_stats_roi_bounds = {}
+        old_catalog_poses = {}
         
         if old_v_axis is not None:
             try:
                 old_view_range = self.view.plot_widget.viewRange()[0]
                 if hasattr(self.view, 'v_line'): old_vline_pos = self.view.v_line.value()
                 if hasattr(self.view, 'region'): old_region_bounds = self.view.region.getRegion()
+                for item in getattr(self.view, 'catalog_overlay_items', []):
+                    if isinstance(item, pg.InfiniteLine):
+                        old_catalog_poses[id(item)] = item.value()
+                    elif isinstance(item, pg.TextItem):
+                        old_catalog_poses[id(item)] = item.pos()
                 for r in self.view.get_active_spectrum_rois():
                     roi = r["roi"]
                     if hasattr(roi, 'getRegion'):
@@ -2230,6 +2236,14 @@ class ExplorerController(QObject):
                             roi.blockSignals(False)
                             if "update_text_pos" in r:
                                 r["update_text_pos"]()
+                                
+                for item in getattr(self.view, 'catalog_overlay_items', []):
+                    if id(item) in old_catalog_poses:
+                        old_pos = old_catalog_poses[id(item)]
+                        if isinstance(item, pg.InfiniteLine):
+                            item.setValue(map_val(old_pos))
+                        elif isinstance(item, pg.TextItem):
+                            item.setPos(map_val(old_pos.x()), old_pos.y())
                     
             # 6. Redraw spectrum with the new axis array
             self.view.update_spectrum()
