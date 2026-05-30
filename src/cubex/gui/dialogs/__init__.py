@@ -4,3 +4,4 @@ from .contour_dialog import ContourDialog
 from .region_properties_dialog import RegionPropertiesDialog
 from .spectral_smoothing_dialog import SpectralSmoothingDialog
 from .contour_options_dialog import ContourOptionsDialog
+from .export_regions_dialog import ExportRegionsDialog
