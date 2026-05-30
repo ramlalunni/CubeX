@@ -814,7 +814,7 @@ class ExplorerView(QWidget):
         self.plot_widget.scene().sigMouseClicked.connect(lambda event: self.universal_click_handler(event, self.plot_widget))
         self.plot_widget_smooth.scene().sigMouseClicked.connect(lambda event: self.universal_click_handler(event, self.plot_widget_smooth))
         self.plot_channel.scene().sigMouseClicked.connect(lambda event: self.universal_click_handler(event, self.plot_channel))
-        self.pv_plot_item.scene().sigMouseClicked.connect(lambda _event: self.set_active_panel('spectrum'))
+        self.pv_plot_item.scene().sigMouseClicked.connect(lambda event: self.universal_click_handler(event, self.pv_plot_item))
         for p in self.panels:
             p['plot_item'].scene().sigMouseClicked.connect(lambda event, view=p['plot_item']: self.universal_click_handler(event, view))
 
@@ -1879,7 +1879,7 @@ class ExplorerView(QWidget):
             if pid == panel_id:
                 frame.setStyleSheet("QFrame#PanelFrame { border: 2px solid #3498db; border-radius: 6px; background-color: #1a1a1a; }")
             else:
-                frame.setStyleSheet("QFrame#PanelFrame { border: 1px solid #333; border-radius: 6px; background-color: #121212; }")
+                frame.setStyleSheet("QFrame#PanelFrame { border: 2px solid #333; border-radius: 6px; background-color: #121212; }")
         
         self.parent_window.update_menu_states()
 
@@ -1917,6 +1917,22 @@ class ExplorerView(QWidget):
         """
         if self.cube_clean is None: return
         
+        if event.double():
+            is_polygon = (source_plot == getattr(self, 'plot_channel', None) and getattr(self, 'is_drawing_polygon', False))
+            if not is_polygon:
+                vb = None
+                if hasattr(source_plot, 'getViewBox'):
+                    vb = source_plot.getViewBox()
+                elif hasattr(source_plot, 'vb'):
+                    vb = source_plot.vb
+                elif hasattr(source_plot, 'plotItem') and hasattr(source_plot.plotItem, 'vb'):
+                    vb = source_plot.plotItem.vb
+                    
+                if vb is not None:
+                    vb.autoRange()
+                event.accept()
+                return
+
         try:
             mp = source_plot.vb.mapSceneToView(event.scenePos())
         except Exception:
@@ -1927,7 +1943,7 @@ class ExplorerView(QWidget):
 
         if source_plot == self.plot_channel:
             self.set_active_panel('channel')
-        elif source_plot == self.plot_widget:
+        elif source_plot in (self.plot_widget, getattr(self, 'plot_widget_smooth', None), getattr(self, 'pv_plot_item', None)):
             self.set_active_panel('spectrum')
         else:
             for i, p in enumerate(self.panels):
