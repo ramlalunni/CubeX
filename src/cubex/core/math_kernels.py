@@ -267,3 +267,52 @@ def convert_spectral_axis(freq_array_hz, rest_freq_hz, target_unit):
     else:
         vel_q = freq_q.to(u.km / u.s, equivalencies=u.doppler_radio(rest_q))
     return vel_q.value
+
+def smooth_spectrum(spectrum, params):
+    """
+    Smooth a 1D spectrum array based on the specified method and parameters.
+    
+    Parameters
+    ----------
+    spectrum : numpy.ndarray
+        The 1D spectrum data array.
+    params : dict
+        A dictionary containing the smoothing method and parameters.
+        Example: {'method': 'boxcar', 'window': 3}
+        
+    Returns
+    -------
+    numpy.ndarray
+        The smoothed spectrum array.
+    """
+    method = params.get('method', None)
+    if method is None:
+        return spectrum
+        
+    ss_smooth = spectrum.copy()
+    try:
+        if method == 'boxcar':
+            from scipy.ndimage import uniform_filter1d
+            w = params.get('window', 3)
+            ss_smooth = uniform_filter1d(ss_smooth, size=w)
+        elif method == 'gaussian':
+            from scipy.ndimage import gaussian_filter1d
+            sigma = params.get('sigma', 1.0)
+            ss_smooth = gaussian_filter1d(ss_smooth, sigma=sigma)
+        elif method == 'savgol':
+            from scipy.signal import savgol_filter
+            w = params.get('window', 5)
+            p = params.get('polyorder', 2)
+            if len(ss_smooth) > w:
+                ss_smooth = savgol_filter(ss_smooth, window_length=w, polyorder=p)
+        elif method == 'hanning':
+            import numpy as np
+            from astropy.convolution import convolve
+            w = params.get('window', 5)
+            if w > 0:
+                kernel_array = np.hanning(w)
+                ss_smooth = convolve(ss_smooth, kernel_array, normalize_kernel=True)
+    except Exception:
+        pass
+        
+    return ss_smooth

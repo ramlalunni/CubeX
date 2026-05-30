@@ -53,7 +53,7 @@ class SpectralSmoothingDialog(QDialog):
         method_layout = QHBoxLayout()
         method_layout.addWidget(QLabel("Method:"))
         self.combo_method = QComboBox()
-        self.combo_method.addItems(["Boxcar", "Gaussian", "Savitzky-Golay"])
+        self.combo_method.addItems(["Boxcar", "Hanning", "Gaussian", "Savitzky-Golay"])
         method_layout.addWidget(self.combo_method)
         layout.addLayout(method_layout)
         
@@ -62,7 +62,7 @@ class SpectralSmoothingDialog(QDialog):
         self.widget_boxcar = QWidget()
         boxcar_layout = QHBoxLayout(self.widget_boxcar)
         boxcar_layout.setContentsMargins(0, 0, 0, 0)
-        boxcar_layout.addWidget(QLabel("Window Size (pixels):"))
+        boxcar_layout.addWidget(QLabel("Window Size (channels):"))
         self.spin_boxcar_w = QSpinBox()
         self.spin_boxcar_w.setRange(2, 1000)
         self.spin_boxcar_w.setValue(3)
@@ -70,11 +70,23 @@ class SpectralSmoothingDialog(QDialog):
         boxcar_layout.addStretch()
         self.param_stack.addWidget(self.widget_boxcar)
         
+        self.widget_hanning = QWidget()
+        hanning_layout = QHBoxLayout(self.widget_hanning)
+        hanning_layout.setContentsMargins(0, 0, 0, 0)
+        hanning_layout.addWidget(QLabel("Window Size (channels):"))
+        self.spin_hanning_w = QSpinBox()
+        self.spin_hanning_w.setRange(3, 1000)
+        self.spin_hanning_w.setValue(5)
+        hanning_layout.addWidget(self.spin_hanning_w)
+        hanning_layout.addStretch()
+        self.param_stack.addWidget(self.widget_hanning)
+
         self.widget_gauss = QWidget()
         gauss_layout = QHBoxLayout(self.widget_gauss)
         gauss_layout.setContentsMargins(0, 0, 0, 0)
-        gauss_layout.addWidget(QLabel("Sigma (pixels):"))
+        gauss_layout.addWidget(QLabel("Sigma (channels):"))
         self.spin_gauss_sigma = QDoubleSpinBox()
+        self.spin_gauss_sigma.setDecimals(1)
         self.spin_gauss_sigma.setRange(0.1, 500.0)
         self.spin_gauss_sigma.setValue(1.0)
         self.spin_gauss_sigma.setSingleStep(0.5)
@@ -85,7 +97,7 @@ class SpectralSmoothingDialog(QDialog):
         self.widget_savgol = QWidget()
         savgol_layout = QHBoxLayout(self.widget_savgol)
         savgol_layout.setContentsMargins(0, 0, 0, 0)
-        savgol_layout.addWidget(QLabel("Window Size:"))
+        savgol_layout.addWidget(QLabel("Window Size (channels):"))
         self.spin_savgol_w = QSpinBox()
         self.spin_savgol_w.setRange(3, 999)
         self.spin_savgol_w.setSingleStep(2)
@@ -157,4 +169,6 @@ class SpectralSmoothingDialog(QDialog):
             if p >= w:
                 p = w - 1
             return {"method": "savgol", "window": w, "polyorder": p}
+        elif method == "Hanning":
+            return {"method": "hanning", "window": self.spin_hanning_w.value()}
         return None

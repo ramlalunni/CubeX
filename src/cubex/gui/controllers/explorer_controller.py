@@ -2423,25 +2423,8 @@ class ExplorerController(QObject):
                     
                 if getattr(self.view, 'smoothing_params', None) is not None and getattr(self.view, 'spectrum_tabs', None) is not None:
                     if self.view.spectrum_tabs.indexOf(self.view.plot_widget_smooth) != -1:
-                        method = self.view.smoothing_params['method']
-                        ss_smooth = ss.copy()
-                        try:
-                            if method == 'boxcar':
-                                from scipy.ndimage import uniform_filter1d
-                                w = self.view.smoothing_params['window']
-                                ss_smooth = uniform_filter1d(ss_smooth, size=w)
-                            elif method == 'gaussian':
-                                from scipy.ndimage import gaussian_filter1d
-                                sigma = self.view.smoothing_params['sigma']
-                                ss_smooth = gaussian_filter1d(ss_smooth, sigma=sigma)
-                            elif method == 'savgol':
-                                from scipy.signal import savgol_filter
-                                w = self.view.smoothing_params['window']
-                                p = self.view.smoothing_params['polyorder']
-                                if len(ss_smooth) > w:
-                                    ss_smooth = savgol_filter(ss_smooth, window_length=w, polyorder=p)
-                        except Exception:
-                            pass
+                        from cubex.core.math_kernels import smooth_spectrum
+                        ss_smooth = smooth_spectrum(ss.copy(), self.view.smoothing_params)
                             
                         if name == "Whole Map":
                             self.view.spectrum_curve_smooth.setData(x=ve, y=ss_smooth)
@@ -2531,23 +2514,8 @@ class ExplorerController(QObject):
 
                 if getattr(self.view, 'smoothing_params', None) is not None and getattr(self.view, 'spectrum_tabs', None) is not None:
                     if self.view.spectrum_tabs.indexOf(self.view.plot_widget_smooth) != -1:
-                        method = self.view.smoothing_params['method']
-                        ss_ov_smooth = ss_resampled.copy()
-                        try:
-                            if method == 'boxcar':
-                                from scipy.ndimage import uniform_filter1d
-                                ss_ov_smooth = uniform_filter1d(ss_ov_smooth, size=self.view.smoothing_params['window'])
-                            elif method == 'gaussian':
-                                from scipy.ndimage import gaussian_filter1d
-                                ss_ov_smooth = gaussian_filter1d(ss_ov_smooth, sigma=self.view.smoothing_params['sigma'])
-                            elif method == 'savgol':
-                                from scipy.signal import savgol_filter
-                                w = self.view.smoothing_params['window']
-                                p = self.view.smoothing_params['polyorder']
-                                if len(ss_ov_smooth) > w:
-                                    ss_ov_smooth = savgol_filter(ss_ov_smooth, window_length=w, polyorder=p)
-                        except Exception:
-                            pass
+                        from cubex.core.math_kernels import smooth_spectrum
+                        ss_ov_smooth = smooth_spectrum(ss_resampled.copy(), self.view.smoothing_params)
 
                         if display_name not in self.view.overlay_spectrum_curves_smooth:
                             c_s = pg.PlotDataItem([], [], stepMode="center", pen=curve_color, name=display_name)
