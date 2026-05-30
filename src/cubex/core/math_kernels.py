@@ -240,3 +240,30 @@ if _NUMBA_AVAILABLE:
     _wup2_v  = np.array([0.0, 1.0], dtype=np.float64)
     _compute_moments_12_numba(_wup2_mc, _wup2_v)
     del _wup2_mc, _wup2_v
+
+def convert_spectral_axis(freq_array_hz, rest_freq_hz, target_unit):
+    """
+    Convert a frequency array (in Hz) to a target velocity unit (km/s).
+    
+    Parameters
+    ----------
+    freq_array_hz : numpy.ndarray
+        1D array of frequencies in Hz.
+    rest_freq_hz : float
+        Rest frequency in Hz.
+    target_unit : str
+        The target velocity convention: 'optical_velocity' or 'radio_velocity'.
+        
+    Returns
+    -------
+    numpy.ndarray
+        1D array of velocities in km/s.
+    """
+    import astropy.units as u
+    freq_q = freq_array_hz * u.Hz
+    rest_q = rest_freq_hz * u.Hz
+    if target_unit == "optical_velocity":
+        vel_q = freq_q.to(u.km / u.s, equivalencies=u.doppler_optical(rest_q))
+    else:
+        vel_q = freq_q.to(u.km / u.s, equivalencies=u.doppler_radio(rest_q))
+    return vel_q.value

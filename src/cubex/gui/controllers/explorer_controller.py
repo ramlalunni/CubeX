@@ -96,6 +96,19 @@ class ExplorerController(QObject):
         if selected_cube is None or sub_v is None:
             return
 
+        target_unit = "optical_velocity" if self.view.combo_axis_type.currentText() == "Optical Velocity" else "radio_velocity"
+        from cubex.core.math_kernels import convert_spectral_axis
+        full_integration_v = convert_spectral_axis(self.view.freq_array, self.view.rest_freq_hz, target_unit)
+
+        if len(self.view.v_axis) > 0 and len(sub_v) > 0:
+            match_idx = np.where(self.view.v_axis == sub_v[0])[0]
+            if len(match_idx) > 0:
+                start_idx = match_idx[0]
+                end_idx = start_idx + len(sub_v)
+                sub_v = full_integration_v[start_idx:end_idx]
+                minX = float(min(sub_v[0], sub_v[-1]))
+                maxX = float(max(sub_v[0], sub_v[-1]))
+
         if self.view._moment_worker is not None and self.view._moment_worker.isRunning():
             self.view._moment_worker.cancel()
             try:
@@ -139,7 +152,7 @@ class ExplorerController(QObject):
                     use_full = p['combo_pv_range'].currentText() == 'Full Cube'
                     cfg['pv_points'] = points
                     cfg['pv_cube']   = self.view.cube_clean if use_full else selected_cube
-                    cfg['pv_sub_v']  = self.view.v_axis     if use_full else sub_v
+                    cfg['pv_sub_v']  = full_integration_v if use_full else sub_v
                     cfg['pv_width']  = active_item.get('width', 1)
                 else:
                     cfg['pv_points'] = None
