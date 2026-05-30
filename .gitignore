@@ -42,3 +42,8 @@ Thumbs.db
 # Experimental files and notes
 # ============================
 scratch/
+
+# ============================
+# files created by pip install
+# ============================
+*.egg-info/

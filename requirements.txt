@@ -7,8 +7,6 @@ pandas
 astropy
 astroquery
 spectral-cube
-regions
-asdf
 
 # --- GUI & Visualization ---
 pyqt5

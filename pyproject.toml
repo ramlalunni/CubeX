@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cubex"
+version = "0.4-preview"
+authors = [
+  { name="Ramlal Unnikrishnan", email="ramlalunni@gmail.com" },
+]
+description = "A lightweight, real-time interferometric image visualization and data cube exploration tool."
+license = "GPL-3.0-or-later"
+readme = "README.md"
+requires-python = ">=3.10"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Operating System :: OS Independent",
+    "Topic :: Scientific/Engineering :: Astronomy",
+]
+dependencies = [
+    "numpy",
+    "scipy",
+    "pandas",
+    "matplotlib",
+    "astropy",
+    "astroquery",
+    "spectral-cube",
+    "PyQt5",
+    "pyqtgraph",
+    "qtawesome"
+]
+
+[project.urls]
+Homepage = "https://github.com/ramlalunni/CubeX"
+"Bug Tracker" = "https://github.com/ramlalunni/CubeX/issues"
+
+[tool.setuptools.package-data]
+# Include anything in the assets folder"
+cubex = ["assets/*"]
+
+[project.scripts]
+# Creates a terminal command called 'cubex' that runs the app
+cubex = "cubex.app:main"

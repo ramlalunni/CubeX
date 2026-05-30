@@ -7,8 +7,8 @@ sets up pyqtgraph configurations, and launches the main KinematicExplorerApp win
 import sys
 import os
 from PyQt5.QtWidgets import QApplication
-from PyQt5.QtCore import Qt
-import pyqtgraph as pg
+from PyQt5.QtCore import Qt, QTimer
+import pyqtgraph as pg 
 
 # Updated to use the new package namespace
 from cubex.gui.components.main_window_view import KinematicExplorerApp
@@ -60,6 +60,36 @@ def load_stylesheet(filepath):
         print(f"Warning: Stylesheet '{filepath}' not found. Loading without custom styles.")
         return ""
 
+def print_startup_banner():
+    """Prints a styled ASCII banner to the terminal, leaving the cursor waiting."""
+    
+    BOLD = '\033[1m'
+    DIM = '\033[2m'
+    RESET = '\033[0m'
+    
+    banner = fr"""{BOLD}
+  ____      _          __  __ 
+ / ___|   _| |__   ___ \ \/ / 
+| |  | | | | '_ \ / _ \ \  /  
+| |__| |_| | |_) |  __/ /  \  
+ \____\__,_|_.__/ \___|/_/\_\ 
+{RESET}
+  CubeX: Interferometric Image Cube Explorer
+  Version 0.4-preview
+  
+  {DIM}Initializing GUI and mathematical kernels... {RESET}"""
+    
+    # Print the banner, do NOT print a newline, and force it to the screen
+    print(banner, flush=True)
+
+
+def on_gui_ready():
+    """Callback triggered exactly when the Qt window finishes painting on screen."""
+    DIM = '\033[2m'
+    RESET = '\033[0m'
+    # Complete the sentence that the banner left hanging
+    print(f"  {DIM}Done.{RESET}\n")
+
 def main():
     """
     Initialize and launch the main CubeX PyQt5 application.
@@ -67,6 +97,10 @@ def main():
     Sets up global Qt attributes, configures the pyqtgraph color scheme,
     loads the application stylesheet, and enters the main event loop.
     """
+
+    # Print the terminal banner immediately so the user knows it's loading
+    print_startup_banner()
+
     app = QApplication(sys.argv)
     app.setOverrideCursor(Qt.ArrowCursor)
     app.setStyle("Fusion")
@@ -83,6 +117,11 @@ def main():
     
     ex = KinematicExplorerApp()
     ex.show()
+
+    # Tell PyQt5: "Once the event loop starts, wait 100 milliseconds 
+    # to let the OS draw the window, then run on_gui_ready"
+    QTimer.singleShot(100, on_gui_ready)
+
     sys.exit(app.exec_())
 
 if __name__ == '__main__':

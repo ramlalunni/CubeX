@@ -76,9 +76,7 @@ autodoc_mock_imports = [
     # Astropy Ecosystem
     "astropy",
     "astroquery",
-    "spectral_cube",  # Note the underscore!
-    "regions",
-    "asdf",
+    "spectral_cube",
     
     # GUI & Visualization
     "PyQt5",

@@ -89,9 +89,9 @@ EOF
 
 if [[ "$CREATE_VENV" =~ ^[Yy]$ ]]; then
     echo "source \"\$PWD/$VENV_DIR/bin/activate\"" >> CubeX.sh
-    echo "python \"\$PWD/main.py\" \"\$@\"" >> CubeX.sh
+    echo "python \"\$PWD/legacy_main.py\" \"\$@\"" >> CubeX.sh
 else
-    echo "$PYTHON_CMD \"\$PWD/main.py\" \"\$@\"" >> CubeX.sh
+    echo "$PYTHON_CMD \"\$PWD/legacy_main.py\" \"\$@\"" >> CubeX.sh
 fi
 chmod +x CubeX.sh
 
