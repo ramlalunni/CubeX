@@ -208,7 +208,7 @@ class ExplorerController(QObject):
                     dx, dv    = pr['dx'], pr['dv']
 
                     self.view.configure_bottom_panel_axes(p, is_pv=True)
-                    p['view'].ui.histogram.gradient.loadPreset('turbo')
+                    self.view.apply_cmap(p['view'], is_velocity=False)
                     p['view'].ui.histogram.axis.setLabel(f"Flux ({self.view.display_unit})")
                     p['plot_item'].setTitle('PV Diagram')
 
