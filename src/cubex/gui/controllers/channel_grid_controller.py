@@ -349,7 +349,7 @@ class ChannelGridController:
                     if idx < n_channels:
                         plot_data = cube[idx, :, :].T
                         
-                        ax.imshow(plot_data, origin='lower', cmap=cmap_name, 
+                        im = ax.imshow(plot_data, origin='lower', cmap=cmap_name, 
                                        vmin=levels[0], vmax=levels[1], extent=extent)
                                        
                         ax.text(0.05, 0.95, f"{v_axis[idx]:.2f} km/s", transform=ax.transAxes,
@@ -368,8 +368,22 @@ class ChannelGridController:
                         ax.axis('off')
                         
                 plt.tight_layout()
+                
+                # Squeeze the grid slightly to make room for the colorbar
+                fig.subplots_adjust(right=0.88)
                 if include_title:
-                    plt.subplots_adjust(top=0.95)
+                    fig.subplots_adjust(top=0.95)
+                    
+                if 'im' in locals():
+                    # Get the top and bottom positions of the entire grid
+                    pos_bottom = axes[-1, 0].get_position().y0
+                    pos_top = axes[0, 0].get_position().y1
+                    
+                    # Manually add the colorbar axis on the right side: [left, bottom, width, height]
+                    cbar_ax = fig.add_axes([0.90, pos_bottom, 0.02, pos_top - pos_bottom])
+                    cbar = fig.colorbar(im, cax=cbar_ax)
+                    cbar.set_label(f"Flux ({self.tab.display_unit})")
+                    
                 plt.savefig(filename, dpi=300, bbox_inches='tight')
                 plt.close(fig)
             except Exception:
