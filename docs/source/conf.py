@@ -56,7 +56,6 @@ templates_path = ['_templates']
 exclude_patterns = []
 
 
-
 # -- Options for HTML output -------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#options-for-html-output
 
@@ -65,3 +64,29 @@ html_css_files = ['custom.css']
 html_static_path = ['_static']
 
 myst_heading_anchors = 3
+
+
+# Tell Sphinx to fake these imports so it doesn't crash on the cloud server
+# Tell Sphinx to fake these imports so it doesn't crash on the cloud server
+autodoc_mock_imports = [
+    # Core Data & Math
+    "numpy",
+    "scipy",
+    "pandas",
+    
+    # Astropy Ecosystem
+    "astropy",
+    "astroquery",
+    "spectral_cube",  # Note the underscore!
+    "regions",
+    "asdf",
+    
+    # GUI & Visualization
+    "PyQt5",
+    "pyqtgraph",
+    "matplotlib",
+    "qtawesome",
+    
+    # Optional performance libraries
+    "numba"
+]
