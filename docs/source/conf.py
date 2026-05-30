@@ -3,6 +3,14 @@
 # For the full list of built-in configuration values, see the documentation:
 # https://www.sphinx-doc.org/en/master/usage/configuration.html
 
+# -- Path setup --------------------------------------------------------------
+import os
+import sys
+
+#os.environ['NUMBA_DISABLE_JIT'] = '1'
+
+sys.path.insert(0, os.path.abspath('../../src'))
+
 # -- Project information -----------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#project-information
 
@@ -18,9 +26,25 @@ release = 'v0.3-preview'
 extensions = [
     'myst_parser',
     'sphinx.ext.autodoc',
+    'sphinx.ext.napoleon',
+    'sphinx.ext.viewcode',
     'sphinx_rtd_theme',
     'sphinx.ext.mathjax'
 ]
+
+# Force Sphinx to document private (_) and undocumented members
+autodoc_default_options = {
+    'members': True,
+    'undoc-members': True,
+    'private-members': True,  # This is the magic key!
+    'show-inheritance': True,
+}
+
+# Source Suffixes (Tell Sphinx to read both types)
+source_suffix = {
+    '.rst': 'restructuredtext',
+    '.md': 'markdown',
+}
 
 # Enable MyST math rendering extensions
 myst_enable_extensions = [

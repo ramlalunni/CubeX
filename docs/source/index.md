@@ -17,3 +17,14 @@ working_with_cubex
 tutorials
 faq_troubleshooting
 ```
+
+## API Reference
+
+Details of the functions and classes in the CubeX backend.
+
+```{toctree}
+:maxdepth: 2
+:caption: API Reference
+
+api/cubex
+```
