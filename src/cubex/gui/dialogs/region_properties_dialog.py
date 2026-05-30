@@ -309,9 +309,11 @@ class RegionPropertiesDialog(QDialog):
                 self.edit_cy.setText(dec_str)
                 
                 if not self.is_line:
-                    self.edit_w.setText(f"{w:.5f}\"")
-                    self.edit_h.setText(f"{h:.5f}\"")
-                    self.lbl_size_img.setText(f"Image: ({w / self.tab.pix_scale_arcsec:.3f} px, {h / self.tab.pix_scale_arcsec:.3f} px)")
+                    display_w = w / 2.0 if self.is_ellipse else w
+                    display_h = h / 2.0 if self.is_ellipse else h
+                    self.edit_w.setText(f"{display_w:.5f}\"")
+                    self.edit_h.setText(f"{display_h:.5f}\"")
+                    self.lbl_size_img.setText(f"Image: ({display_w / self.tab.pix_scale_arcsec:.3f} px, {display_h / self.tab.pix_scale_arcsec:.3f} px)")
                 
                 self.lbl_center_img.setText(f"Image: ({px:.3f} px, {py:.3f} px)")
                 
@@ -336,9 +338,11 @@ class RegionPropertiesDialog(QDialog):
                 self.edit_cx.setText(f"{cx:.5f}")
                 self.edit_cy.setText(f"{cy:.5f}")
                 if not self.is_line:
-                    self.edit_w.setText(f"{w:.5f}")
-                    self.edit_h.setText(f"{h:.5f}")
-                    self.lbl_size_img.setText(f"Image: ({w:.3f} arcsec, {h:.3f} arcsec)")
+                    display_w = w / 2.0 if self.is_ellipse else w
+                    display_h = h / 2.0 if self.is_ellipse else h
+                    self.edit_w.setText(f"{display_w:.5f}")
+                    self.edit_h.setText(f"{display_h:.5f}")
+                    self.lbl_size_img.setText(f"Image: ({display_w:.3f} arcsec, {display_h:.3f} arcsec)")
                 self.lbl_center_img.setText(f"Image: ({cx:.3f} arcsec, {cy:.3f} arcsec)")
                 
                 if self.is_rect:
@@ -422,6 +426,10 @@ class RegionPropertiesDialog(QDialog):
                 w_val = float(self.edit_w.text().replace('"', ''))
                 h_val = float(self.edit_h.text().replace('"', ''))
                 pa_val = float(self.edit_pa.text())
+                
+                if self.is_ellipse:
+                    w_val *= 2.0
+                    h_val *= 2.0
                 
                 pos_x = cx - w_val / 2.0
                 pos_y = cy - h_val / 2.0

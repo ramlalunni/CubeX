@@ -143,10 +143,13 @@ class MainController:
         if not roi: return "Whole Map"
         if isinstance(roi, pg.EllipseROI) or isinstance(roi, pg.RectROI):
             c = roi.pos() + roi.size()/2
-            a, b = roi.size()[0]/2, roi.size()[1]/2
             pa = roi.angle()
-            rtype = "Ellipse" if isinstance(roi, pg.EllipseROI) else "Rectangle"
-            return f"{rtype} - Center({c.x():.2f}, {c.y():.2f}), a={a:.2f}, b={b:.2f}, PA={pa:.1f}"
+            if isinstance(roi, pg.EllipseROI):
+                a, b = roi.size()[0]/2, roi.size()[1]/2
+                return f"Ellipse - Center({c.x():.2f}, {c.y():.2f}), a={a:.2f}, b={b:.2f}, PA={pa:.1f}"
+            else:
+                width, height = roi.size()[0], roi.size()[1]
+                return f"Rectangle - Center({c.x():.2f}, {c.y():.2f}), width={width:.2f}, height={height:.2f}, PA={pa:.1f}"
         else:
             return "Custom Polygon"
 
